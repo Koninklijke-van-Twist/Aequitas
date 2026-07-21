@@ -211,7 +211,7 @@ if ($uiLabelsJson === false) {
         table.seshat-table th.is-sorted-asc::after { content: ' ▲'; font-size: 0.72rem; }
         table.seshat-table th.is-sorted-desc::after { content: ' ▼'; font-size: 0.72rem; }
         table.seshat-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .seshat-week-blocks { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+        .seshat-week-blocks { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(640px, 1fr)); }
         .seshat-week-block { border: 1px solid var(--kvt-line); border-radius: 12px; padding: 12px; background: #fff; }
         .seshat-week-block h3 { font-size: 1rem; margin-bottom: 8px; }
         .seshat-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: none; align-items: flex-end; justify-content: center; z-index: 13000; padding: 0; }
