@@ -23,7 +23,7 @@ alwaysApply: true
 - Leidende BC-entities:
   - `Urenstaatregels` — goedgekeurde timesheetregels per week
   - `Urenstaten` — headerinformatie (medewerkernaam)
-  - `AppResources` — medewerkernaam en kostenplaats (`LVS_Global_Dimension_2_Code`)
+  - `AppResources` — medewerkernaam
 - Goedgekeurde regels cachen in `web/cache/seshat/` per week; verhoog `SESHAT_CACHE_VERSION` bij schema-wijzigingen.
 - Productiviteit via werksoortlijsten: productief (blauw), improductief (rood), genegeerd (uitgesloten).
 

@@ -301,7 +301,6 @@ function seshat_fetch_resource_map(string $company): array
 
         $map[$no] = [
             'name' => trim((string) ($row['Name'] ?? '')),
-            'cost_center' => trim((string) ($row['LVS_Global_Dimension_2_Code'] ?? '')),
         ];
     }
 
@@ -525,7 +524,6 @@ function seshat_filter_dashboard(array $dashboard, array $hiddenCategories): arr
 
         $personSummary[] = [
             'name' => $card['name'],
-            'cost_center' => $card['cost_center'],
             'total_hours' => $card['total_hours'],
             'avg_productivity' => $avgProductivity,
         ];
@@ -615,7 +613,7 @@ function seshat_build_dashboard(string $company, string $dateFrom, string $dateT
             }
         }
 
-        $resource = $resourceMap[$resourceNo] ?? ['name' => '', 'cost_center' => ''];
+        $resource = $resourceMap[$resourceNo] ?? ['name' => ''];
         $resourceName = trim((string) ($resource['name'] ?? ''));
         if ($resourceName === '') {
             $header = $headerMap[(string) ($line['time_sheet_no'] ?? '')] ?? null;
@@ -632,7 +630,6 @@ function seshat_build_dashboard(string $company, string $dateFrom, string $dateT
             $people[$personKey] = [
                 'resource_no' => $resourceNo,
                 'name' => $resourceName,
-                'cost_center' => trim((string) ($resource['cost_center'] ?? '')),
                 'productive_hours' => 0.0,
                 'unproductive_hours' => 0.0,
                 'leave_hours' => 0.0,
@@ -668,7 +665,6 @@ function seshat_build_dashboard(string $company, string $dateFrom, string $dateT
                     'week_label' => 'Week ' . $weekMeta['week'] . ' (' . $weekMeta['year'] . ')',
                     'resource_no' => $resourceNo,
                     'name' => $resourceName,
-                    'cost_center' => trim((string) ($resource['cost_center'] ?? '')),
                     'productive_hours' => 0.0,
                     'unproductive_hours' => 0.0,
                     'leave_hours' => 0.0,
@@ -767,7 +763,6 @@ function seshat_build_dashboard(string $company, string $dateFrom, string $dateT
             'key' => $personKey,
             'resource_no' => $person['resource_no'],
             'name' => $person['name'],
-            'cost_center' => $person['cost_center'],
             'productive_hours' => $productive,
             'unproductive_hours' => $unproductive,
             'leave_hours' => $leave,
@@ -795,7 +790,6 @@ function seshat_build_dashboard(string $company, string $dateFrom, string $dateT
             'week_year' => (int) $row['week_year'],
             'week_number' => (int) $row['week_number'],
             'week_label' => (string) $row['week_label'],
-            'cost_center' => (string) $row['cost_center'],
             'name' => (string) $row['name'],
             'productive_hours' => $productive,
             'unproductive_hours' => round((float) $row['unproductive_hours'], 2),
@@ -822,7 +816,6 @@ function seshat_build_dashboard(string $company, string $dateFrom, string $dateT
 
         return [
             'name' => $card['name'],
-            'cost_center' => $card['cost_center'],
             'total_hours' => $card['total_hours'],
             'avg_productivity' => $avgProductivity,
         ];
@@ -899,7 +892,6 @@ function seshat_build_excel_xml(array $personSummary, array $weekGroups): string
 
         $xml .= '<Worksheet ss:Name="' . $escape($sheetName) . '"><Table>' . "\n";
         $xml .= '<Row>'
-            . '<Cell><Data ss:Type="String">Kostenplaats</Data></Cell>'
             . '<Cell><Data ss:Type="String">Medewerker naam</Data></Cell>'
             . '<Cell><Data ss:Type="String">Totaal uren</Data></Cell>'
             . '<Cell><Data ss:Type="String">Productiviteit</Data></Cell>'
@@ -907,7 +899,6 @@ function seshat_build_excel_xml(array $personSummary, array $weekGroups): string
 
         foreach ($rows as $row) {
             $xml .= '<Row>'
-                . '<Cell><Data ss:Type="String">' . $escape((string) $row['cost_center']) . '</Data></Cell>'
                 . '<Cell><Data ss:Type="String">' . $escape((string) $row['name']) . '</Data></Cell>'
                 . '<Cell><Data ss:Type="Number">' . $escape((string) $row['total_hours']) . '</Data></Cell>'
                 . '<Cell><Data ss:Type="String">' . $escape(seshat_format_percent((float) $row['productivity'])) . '</Data></Cell>'

@@ -146,7 +146,6 @@ $uiLabelsJson = json_encode([
     'last_week_orders' => LOC('seshat.card.last_week_orders'),
     'total_hours' => LOC('seshat.card.total_hours'),
     'employee' => LOC('seshat.col.employee'),
-    'cost_center' => LOC('seshat.col.cost_center'),
     'avg_productivity' => LOC('seshat.col.avg_productivity'),
     'productivity' => LOC('seshat.col.productivity'),
     'hours_total' => LOC('seshat.modal.hours_total'),
@@ -520,7 +519,6 @@ if ($uiLabelsJson === false) {
                 : Number(card.productivity || 0);
             return {
                 name: card.name,
-                cost_center: card.cost_center,
                 total_hours: card.total_hours,
                 avg_productivity: avgProductivity
             };
@@ -696,14 +694,12 @@ if ($uiLabelsJson === false) {
                 + '<h3>' + escapeHtml(weekLabel) + '</h3>'
                 + '<div class="seshat-table-wrap">'
                 + '<table class="seshat-table" data-sortable="1"><thead><tr>'
-                + '<th data-sort="string">' + escapeHtml(uiLabels.cost_center) + '</th>'
                 + '<th data-sort="string">' + escapeHtml(uiLabels.employee) + '</th>'
                 + '<th class="num" data-sort="number">' + escapeHtml(uiLabels.total_hours) + '</th>'
                 + '<th class="num" data-sort="number">' + escapeHtml(uiLabels.productivity) + '</th>'
                 + '</tr></thead><tbody>'
                 + rows.map(function (row) {
                     return '<tr>'
-                        + '<td>' + escapeHtml(row.cost_center || '') + '</td>'
                         + '<td>' + escapeHtml(row.name || '') + '</td>'
                         + '<td class="num" data-value="' + escapeHtml(String(row.total_hours || 0)) + '">' + escapeHtml(formatHours(row.total_hours)) + '</td>'
                         + '<td class="num" data-value="' + escapeHtml(String(row.productivity || 0)) + '">' + escapeHtml(formatPercent(row.productivity) + '%') + '</td>'
@@ -729,7 +725,7 @@ if ($uiLabelsJson === false) {
         }
         openModalKey = personKey;
         modalTitle.textContent = card.name || '';
-        modalSubtitle.textContent = (card.cost_center ? card.cost_center + ' · ' : '') + formatHours(card.total_hours) + ' ' + uiLabels.hours_total;
+        modalSubtitle.textContent = formatHours(card.total_hours) + ' ' + uiLabels.hours_total;
         modalAccordion.innerHTML = '';
         (card.modal_work_orders || []).forEach(function (workOrder, woIndex) {
             var item = document.createElement('div');
