@@ -19,7 +19,7 @@ alwaysApply: true
 - Hoofdflow staat in `web/index.php`.
 - BC OData-helpers staan in `web/bc_data.php`.
 - Timesheet-data altijd via functies in `web/timesheet_data.php` ophalen.
-- Configuratie voor werksoorten staat in `web/seshat_config.php` en `web/data/seshat_*.json`.
+- Configuratie voor werksoorten staat in `web/seshat_config.php` en `web/seshat_*.json`.
 - Leidende BC-entities:
   - `Urenstaatregels` — goedgekeurde timesheetregels per week
   - `Urenstaten` — headerinformatie (medewerkernaam)

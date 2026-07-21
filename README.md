@@ -6,9 +6,9 @@ Timesheet-productiviteitsoverzicht op basis van goedgekeurde urenstaten uit Busi
 
 Pas de werksoortlijsten handmatig aan:
 
-- `web/data/seshat_productive_work_types.json` — productieve werksoorten (blauw in pie-chart)
-- `web/data/seshat_leave_work_types.json` — verlof (groen in pie-chart)
-- `web/data/seshat_ignored_work_types.json` — volledig genegeerd (niet zichtbaar)
+- `web/seshat_productive_work_types.json` — productieve werksoorten (blauw in pie-chart)
+- `web/seshat_leave_work_types.json` — verlof (groen in pie-chart)
+- `web/seshat_ignored_work_types.json` — volledig genegeerd (niet zichtbaar)
 
 ## Cache
 

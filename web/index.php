@@ -275,13 +275,6 @@ if ($uiLabelsJson === false) {
                 <button class="seshat-btn seshat-btn-secondary" type="button" id="seshat-export-excel"><?= seshat_h(LOC('seshat.btn.excel')) ?></button>
             </div>
         </form>
-
-        <p class="seshat-config-note">
-            <?= seshat_h(LOC('seshat.config.note')) ?>
-            <code>data/seshat_productive_work_types.json</code>,
-            <code>data/seshat_leave_work_types.json</code>,
-            <code>data/seshat_ignored_work_types.json</code>
-        </p>
     </section>
 
     <?php if ($errorKey !== ''): ?>

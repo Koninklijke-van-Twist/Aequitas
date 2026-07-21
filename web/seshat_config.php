@@ -15,7 +15,7 @@ const SESHAT_RESOURCES_SELECT = 'No,Name,LVS_Global_Dimension_2_Code';
 
 function seshat_config_path(string $filename): string
 {
-    return __DIR__ . '/data/' . $filename;
+    return __DIR__ . '/' . $filename;
 }
 
 function seshat_read_string_list(string $filename): array
