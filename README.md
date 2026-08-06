@@ -1,13 +1,13 @@
 # Seshat
 
-Timesheet-productiviteitsoverzicht op basis van goedgekeurde urenstaten uit Business Central.
+Timesheet-overzicht direct/indirect op basis van goedgekeurde urenstaten uit Business Central.
 
 ## Configuratie
 
 Pas de werksoortlijsten handmatig aan:
 
-- `web/seshat_productive_work_types.json` — productieve werksoorten (blauw in pie-chart)
-- `web/seshat_leave_work_types.json` — verlof (groen in pie-chart)
+- `web/seshat_productive_work_types.json` — directe werksoorten (groen in pie-chart)
+- `web/seshat_leave_work_types.json` — verlof (blauw in pie-chart)
 - `web/seshat_ignored_work_types.json` — volledig genegeerd (niet zichtbaar)
 
 ## Cache

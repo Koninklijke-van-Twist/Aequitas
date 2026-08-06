@@ -852,63 +852,209 @@ function seshat_format_percent(float $value): string
     return number_format($value, 1, ',', '.') . '%';
 }
 
-function seshat_build_excel_xml(array $personSummary, array $weekGroups): string
+function seshat_excel_escape(string $value): string
 {
-    $escape = static function (string $value): string {
-        return htmlspecialchars($value, ENT_QUOTES | ENT_XML1, 'UTF-8');
-    };
+    return htmlspecialchars($value, ENT_QUOTES | ENT_XML1, 'UTF-8');
+}
 
-    $xml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
-    $xml .= '<?mso-application progid="Excel.Sheet"?>' . "\n";
-    $xml .= '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" '
-        . 'xmlns:o="urn:schemas-microsoft-com:office:office" '
-        . 'xmlns:x="urn:schemas-microsoft-com:office:excel" '
-        . 'xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' . "\n";
+function seshat_excel_sheet_xml(array $rows): string
+{
+    $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        . '<sheetData>';
 
-    $xml .= '<Worksheet ss:Name="Overzicht"><Table>' . "\n";
-    $xml .= '<Row>'
-        . '<Cell><Data ss:Type="String">Medewerker</Data></Cell>'
-        . '<Cell><Data ss:Type="String">Totaal uren</Data></Cell>'
-        . '<Cell><Data ss:Type="String">Gemiddeld productiviteit per week</Data></Cell>'
-        . '</Row>' . "\n";
-
-    foreach ($personSummary as $row) {
-        $xml .= '<Row>'
-            . '<Cell><Data ss:Type="String">' . $escape((string) $row['name']) . '</Data></Cell>'
-            . '<Cell><Data ss:Type="Number">' . $escape((string) $row['total_hours']) . '</Data></Cell>'
-            . '<Cell><Data ss:Type="String">' . $escape(seshat_format_percent((float) $row['avg_productivity'])) . '</Data></Cell>'
-            . '</Row>' . "\n";
+    $rowIndex = 1;
+    foreach ($rows as $row) {
+        $xml .= '<row r="' . $rowIndex . '">';
+        $colIndex = 0;
+        foreach ($row as $cell) {
+            $colLetter = seshat_excel_column_name($colIndex);
+            $ref = $colLetter . $rowIndex;
+            if (is_int($cell) || is_float($cell)) {
+                $xml .= '<c r="' . $ref . '"><v>' . seshat_excel_escape((string) $cell) . '</v></c>';
+            } else {
+                $xml .= '<c r="' . $ref . '" t="inlineStr"><is><t>' . seshat_excel_escape((string) $cell) . '</t></is></c>';
+            }
+            $colIndex++;
+        }
+        $xml .= '</row>';
+        $rowIndex++;
     }
 
-    $xml .= '</Table></Worksheet>' . "\n";
-
-    $sheetIndex = 1;
-    foreach ($weekGroups as $weekLabel => $rows) {
-        $sheetName = preg_replace('/[\[\]\:\*\?\/\\\\]/', ' ', (string) $weekLabel) ?? 'Week';
-        $sheetName = mb_substr(trim($sheetName), 0, 31);
-        if ($sheetName === '') {
-            $sheetName = 'Week ' . $sheetIndex;
-        }
-
-        $xml .= '<Worksheet ss:Name="' . $escape($sheetName) . '"><Table>' . "\n";
-        $xml .= '<Row>'
-            . '<Cell><Data ss:Type="String">Medewerker naam</Data></Cell>'
-            . '<Cell><Data ss:Type="String">Totaal uren</Data></Cell>'
-            . '<Cell><Data ss:Type="String">Productiviteit</Data></Cell>'
-            . '</Row>' . "\n";
-
-        foreach ($rows as $row) {
-            $xml .= '<Row>'
-                . '<Cell><Data ss:Type="String">' . $escape((string) $row['name']) . '</Data></Cell>'
-                . '<Cell><Data ss:Type="Number">' . $escape((string) $row['total_hours']) . '</Data></Cell>'
-                . '<Cell><Data ss:Type="String">' . $escape(seshat_format_percent((float) $row['productivity'])) . '</Data></Cell>'
-                . '</Row>' . "\n";
-        }
-
-        $xml .= '</Table></Worksheet>' . "\n";
-        $sheetIndex++;
-    }
-
-    $xml .= '</Workbook>';
+    $xml .= '</sheetData></worksheet>';
     return $xml;
+}
+
+function seshat_excel_column_name(int $index): string
+{
+    $name = '';
+    $n = $index;
+    do {
+        $name = chr(65 + ($n % 26)) . $name;
+        $n = intdiv($n, 26) - 1;
+    } while ($n >= 0);
+
+    return $name;
+}
+
+/**
+ * Bouwt een week-matrix: newest week eerst, kolommen uren + % direct per week.
+ *
+ * @return array{weeks: list<array{key:string,label:string}>, rows: list<list<string|float>>}
+ */
+function seshat_excel_weeks_matrix(array $personSummary, array $weeklySummary): array
+{
+    $weeksByKey = [];
+    foreach ($weeklySummary as $row) {
+        $year = (int) ($row['week_year'] ?? 0);
+        $week = (int) ($row['week_number'] ?? 0);
+        if ($year <= 0 || $week <= 0) {
+            continue;
+        }
+
+        $key = $year . '-W' . str_pad((string) $week, 2, '0', STR_PAD_LEFT);
+        if (!isset($weeksByKey[$key])) {
+            $weeksByKey[$key] = [
+                'key' => $key,
+                'year' => $year,
+                'week' => $week,
+                'label' => 'wk' . $week,
+            ];
+        }
+    }
+
+    $weeks = array_values($weeksByKey);
+    usort($weeks, static function (array $a, array $b): int {
+        return [$b['year'], $b['week']] <=> [$a['year'], $a['week']];
+    });
+
+    $byPersonWeek = [];
+    foreach ($weeklySummary as $row) {
+        $name = (string) ($row['name'] ?? '');
+        $year = (int) ($row['week_year'] ?? 0);
+        $week = (int) ($row['week_number'] ?? 0);
+        if ($name === '' || $year <= 0 || $week <= 0) {
+            continue;
+        }
+
+        $key = $year . '-W' . str_pad((string) $week, 2, '0', STR_PAD_LEFT);
+        $byPersonWeek[$name][$key] = [
+            'hours' => (float) ($row['total_hours'] ?? 0),
+            'productivity' => (float) ($row['productivity'] ?? 0),
+        ];
+    }
+
+    $header = ['Medewerker'];
+    foreach ($weeks as $week) {
+        $header[] = 'Uren ' . $week['label'];
+        $header[] = '% Direct ' . $week['label'];
+    }
+
+    $matrixRows = [$header];
+    foreach ($personSummary as $person) {
+        $name = (string) ($person['name'] ?? '');
+        if ($name === '') {
+            continue;
+        }
+
+        $row = [$name];
+        foreach ($weeks as $week) {
+            $values = $byPersonWeek[$name][$week['key']] ?? null;
+            if ($values === null) {
+                $row[] = '';
+                $row[] = '';
+                continue;
+            }
+
+            $row[] = (float) $values['hours'];
+            $row[] = seshat_format_percent((float) $values['productivity']);
+        }
+        $matrixRows[] = $row;
+    }
+
+    return [
+        'weeks' => $weeks,
+        'rows' => $matrixRows,
+    ];
+}
+
+function seshat_build_excel_xlsx(array $personSummary, array $weeklySummary): string
+{
+    if (!class_exists('ZipArchive')) {
+        throw new RuntimeException('ZipArchive is niet beschikbaar voor Excel-export.');
+    }
+
+    $overviewRows = [
+        ['Medewerker', 'Totaal uren', 'Gem. % direct per week'],
+    ];
+    foreach ($personSummary as $row) {
+        $overviewRows[] = [
+            (string) ($row['name'] ?? ''),
+            (float) ($row['total_hours'] ?? 0),
+            seshat_format_percent((float) ($row['avg_productivity'] ?? 0)),
+        ];
+    }
+
+    $weeksMatrix = seshat_excel_weeks_matrix($personSummary, $weeklySummary);
+    $weeksRows = $weeksMatrix['rows'];
+
+    $tmp = tempnam(sys_get_temp_dir(), 'seshat_xlsx_');
+    if ($tmp === false) {
+        throw new RuntimeException('Kon tijdelijk Excel-bestand niet aanmaken.');
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($tmp, ZipArchive::OVERWRITE) !== true) {
+        @unlink($tmp);
+        throw new RuntimeException('Kon Excel-archief niet openen.');
+    }
+
+    $zip->addFromString('[Content_Types].xml',
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        . '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        . '<Default Extension="xml" ContentType="application/xml"/>'
+        . '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        . '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        . '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        . '</Types>'
+    );
+
+    $zip->addFromString('_rels/.rels',
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        . '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        . '</Relationships>'
+    );
+
+    $zip->addFromString('xl/workbook.xml',
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        . 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        . '<sheets>'
+        . '<sheet name="Overzicht" sheetId="1" r:id="rId1"/>'
+        . '<sheet name="Weken" sheetId="2" r:id="rId2"/>'
+        . '</sheets>'
+        . '</workbook>'
+    );
+
+    $zip->addFromString('xl/_rels/workbook.xml.rels',
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        . '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        . '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+        . '</Relationships>'
+    );
+
+    $zip->addFromString('xl/worksheets/sheet1.xml', seshat_excel_sheet_xml($overviewRows));
+    $zip->addFromString('xl/worksheets/sheet2.xml', seshat_excel_sheet_xml($weeksRows));
+    $zip->close();
+
+    $binary = file_get_contents($tmp);
+    @unlink($tmp);
+    if ($binary === false) {
+        throw new RuntimeException('Kon Excel-bestand niet lezen.');
+    }
+
+    return $binary;
 }

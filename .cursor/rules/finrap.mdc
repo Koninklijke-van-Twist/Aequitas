@@ -25,7 +25,7 @@ alwaysApply: true
   - `Urenstaten` — headerinformatie (medewerkernaam)
   - `AppResources` — medewerkernaam
 - Goedgekeurde regels cachen in `web/cache/seshat/` per week; verhoog `SESHAT_CACHE_VERSION` bij schema-wijzigingen.
-- Productiviteit via werksoortlijsten: productief (blauw), improductief (rood), genegeerd (uitgesloten).
+- Productiviteit via werksoortlijsten: direct (groen), indirect (rood), verlof (blauw), genegeerd (uitgesloten).
 
 ## UI-regels
 - Geen zware frameworks introduceren zonder expliciet verzoek.

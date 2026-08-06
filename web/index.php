@@ -111,11 +111,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             seshat_build_dashboard($company, $dateFrom, $dateTo),
             $hiddenCategories
         );
-        $filename = 'seshat_' . seshat_company_slug($company) . '_' . $dateFrom . '_' . $dateTo . '.xls';
-        header('Content-Type: application/vnd.ms-excel; charset=UTF-8');
+        $filename = 'seshat_' . seshat_company_slug($company) . '_' . $dateFrom . '_' . $dateTo . '.xlsx';
+        $binary = seshat_build_excel_xlsx(
+            $exportData['person_summary'] ?? [],
+            $exportData['weekly_summary'] ?? []
+        );
+        header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         header('Content-Disposition: attachment; filename="' . $filename . '"');
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        echo seshat_build_excel_xml($exportData['person_summary'], $exportData['week_groups']);
+        header('Content-Length: ' . (string) strlen($binary));
+        echo $binary;
         exit;
     } catch (Throwable $exportError) {
         $errorKey = 'seshat.error.load_failed';
@@ -200,9 +205,9 @@ if ($uiLabelsJson === false) {
         .seshat-legend-toggle { border: 1px solid var(--kvt-line); background: #fff; border-radius: 999px; padding: 8px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 0.82rem; color: var(--kvt-text); }
         .seshat-legend-toggle.is-hidden { opacity: 0.45; text-decoration: line-through; }
         .seshat-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
-        .seshat-dot-productive { background: var(--kvt-main-blue); }
+        .seshat-dot-productive { background: #15803d; }
         .seshat-dot-unproductive { background: var(--kvt-danger); }
-        .seshat-dot-leave { background: #15803d; }
+        .seshat-dot-leave { background: var(--kvt-main-blue); }
         .seshat-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table.seshat-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; min-width: 520px; }
         table.seshat-table th, table.seshat-table td { border-bottom: 1px solid var(--kvt-line); padding: 10px 8px; text-align: left; vertical-align: top; }
@@ -547,7 +552,7 @@ if ($uiLabelsJson === false) {
         }
         var productivePct = (Number(productive || 0) / total) * 100;
         var unproductivePct = productivePct + ((Number(unproductive || 0) / total) * 100);
-        return 'background: conic-gradient(var(--kvt-main-blue) 0 ' + productivePct + '%, var(--kvt-danger) ' + productivePct + '% ' + unproductivePct + '%, #15803d ' + unproductivePct + '% 100%);';
+        return 'background: conic-gradient(#15803d 0 ' + productivePct + '%, var(--kvt-danger) ' + productivePct + '% ' + unproductivePct + '%, var(--kvt-main-blue) ' + unproductivePct + '% 100%);';
     }
 
     function formatWorkOrderSummary(workOrder) {
@@ -836,7 +841,41 @@ if ($uiLabelsJson === false) {
             } else {
                 params.delete('hide');
             }
-            window.location.href = 'index.php?' + params.toString();
+
+            var exportUrl = 'index.php?' + params.toString();
+            fetch(exportUrl, { credentials: 'same-origin' })
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('Export mislukt');
+                    }
+                    var disposition = response.headers.get('Content-Disposition') || '';
+                    var match = disposition.match(/filename="?([^"]+)"?/i);
+                    var filename = match ? match[1] : 'seshat.xlsx';
+                    return response.blob().then(function (blob) {
+                        return { blob: blob, filename: filename };
+                    });
+                })
+                .then(function (result) {
+                    var objectUrl = URL.createObjectURL(result.blob);
+                    var link = document.createElement('a');
+                    link.href = objectUrl;
+                    link.download = result.filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(objectUrl);
+                })
+                .catch(function () {
+                    window.alert('Excel-export mislukt. Probeer het later opnieuw.');
+                })
+                .finally(function () {
+                    clearLoaderTimer();
+                    if (loader) {
+                        loader.classList.remove('is-visible');
+                        loader.setAttribute('aria-hidden', 'true');
+                        loader.setAttribute('aria-busy', 'false');
+                    }
+                });
         });
     }
 })();
