@@ -69,6 +69,8 @@ foreach ($companies as $company) {
             'cached_at' => (int) ($meta['cached_at'] ?? time()),
             'item_count' => (int) ($meta['item_count'] ?? 0),
             'price_line_count' => (int) ($meta['price_line_count'] ?? 0),
+            'item_pages' => (int) ($meta['item_pages'] ?? 0),
+            'price_line_pages' => (int) ($meta['price_line_pages'] ?? 0),
         ];
     } catch (Throwable $error) {
         $ok = false;

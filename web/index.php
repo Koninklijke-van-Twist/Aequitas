@@ -98,10 +98,7 @@ $rows = [];
 $vendors = [];
 
 if (is_array($cache)) {
-    $rows = aequitas_build_table_rows(
-        is_array($cache['items'] ?? null) ? $cache['items'] : [],
-        is_array($cache['price_lines'] ?? null) ? $cache['price_lines'] : []
-    );
+    $rows = aequitas_build_table_rows_from_cache($company);
     $vendors = aequitas_vendor_options($rows);
 }
 

@@ -4,8 +4,9 @@
  * Constants
  */
 
-const AEQUITAS_CACHE_VERSION = 1;
+const AEQUITAS_CACHE_VERSION = 2;
 const AEQUITAS_SETTLEMENT_FACTOR = 1.03;
+const AEQUITAS_PAGE_SIZE = 200;
 
 const AEQUITAS_ITEMS_ENTITY = 'AppItemCard';
 const AEQUITAS_PRICE_LINES_ENTITY = 'Prijslijstregels';

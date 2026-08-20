@@ -23,7 +23,7 @@ alwaysApply: true
 - Leidende BC-entities:
   - `AppItemCard` — artikel, leverancier, laatste directe kosten, eenheid basis
   - `Prijslijstregels` — minimumaantal, eenheid, inkoopprijs, begin- en einddatum
-- `nightly.php` haalt beide entities via GET op en cacht ze in `web/cache/aequitas/` tot de volgende nightly-run. Verhoog `AEQUITAS_CACHE_VERSION` bij schema-wijzigingen.
+- `nightly.php` haalt beide entities via GET gepagineerd (`$top` + `Prefer: odata.maxpagesize`) op en schrijft elke pagina direct naar JSONL in `web/cache/aequitas/` tot de volgende nightly-run. Verhoog `AEQUITAS_CACHE_VERSION` bij schema-wijzigingen. Gebruik niet `odata_get_all()` voor deze entities.
 - `index.php` leest alleen de nightly-cache; geen live BC-calls op de hoofdpagina.
 - Vaste verrekeningsprijs = `1.03 * Last_Direct_Cost`.
 - Toon alleen prijslijstregels waarvan de huidige datum tussen begindatum en einddatum ligt.
