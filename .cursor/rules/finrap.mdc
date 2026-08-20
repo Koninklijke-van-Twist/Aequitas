@@ -1,13 +1,13 @@
 ---
-description: Seshat projectconventies voor architectuur, data, UI en OData
+description: Aequitas projectconventies voor architectuur, data, UI en OData
 alwaysApply: true
 ---
 
-# Seshat projectregels
+# Aequitas projectregels
 
 ## Scope en architectuur
 - Deze applicatie draait volledig vanuit de map `web/`.
-- Houd links relatief (`index.php`, `odata.php?...`).
+- Houd links relatief (`index.php`, `odata.php?...`, `nightly.php`).
 - De app is mobile-first. Nieuwe UI-wijzigingen moeten eerst op telefoonscherm goed leesbaar zijn.
 
 ## Niet wijzigen
@@ -18,30 +18,29 @@ alwaysApply: true
 ## Data en logica
 - Hoofdflow staat in `web/index.php`.
 - BC OData-helpers staan in `web/bc_data.php`.
-- Timesheet-data altijd via functies in `web/timesheet_data.php` ophalen.
-- Configuratie voor werksoorten staat in `web/seshat_config.php` en `web/seshat_*.json`.
+- Item- en prijslijstdata altijd via functies in `web/aequitas_data.php` ophalen of joinen.
+- Configuratie en `$select`-velden staan in `web/aequitas_config.php`.
 - Leidende BC-entities:
-  - `Urenstaatregels` — goedgekeurde timesheetregels per week
-  - `Urenstaten` — headerinformatie (medewerkernaam)
-  - `AppResources` — medewerkernaam
-- Goedgekeurde regels cachen in `web/cache/seshat/` per week; verhoog `SESHAT_CACHE_VERSION` bij schema-wijzigingen.
-- Productiviteit via werksoortlijsten: direct (groen), indirect (rood), verlof (blauw), genegeerd (uitgesloten).
+  - `AppItemCard` — artikel, leverancier, laatste directe kosten, eenheid basis
+  - `Prijslijstregels` — minimumaantal, eenheid, inkoopprijs, begin- en einddatum
+- `nightly.php` haalt beide entities via GET op en cacht ze in `web/cache/aequitas/` tot de volgende nightly-run. Verhoog `AEQUITAS_CACHE_VERSION` bij schema-wijzigingen.
+- `index.php` leest alleen de nightly-cache; geen live BC-calls op de hoofdpagina.
+- Vaste verrekeningsprijs = `1.03 * Last_Direct_Cost`.
+- Toon alleen prijslijstregels waarvan de huidige datum tussen begindatum en einddatum ligt.
+- Bij meerdere huidige regels per artikel: toon de nieuwste begindatum en markeer de rij als conflict.
 
 ## UI-regels
 - Geen zware frameworks introduceren zonder expliciet verzoek.
 - Gebruik bestaande favicon/manifest-bestanden op elke HTML-pagina.
 - Gebruik op de hoofdpagina altijd `logo-website.png`.
-- Toon een laadscherm na ~500 ms bij navigatie die BC-calls triggert (class `seshat-nav`).
+- Rijen met gelijke laatste directe kosten en inkoopprijs blijven normaal; afwijkingen oranje; conflicterende dubbele regels knipperen rood.
 
 ## Veiligheid en kwaliteit
 - Vang OData-fouten af en toon een korte gebruikersvriendelijke melding.
-- Gebruik cache-widget via `injectTimerHtml(...)` uit `odata.php`; endpoint-acties blijven:
-  - `odata.php?action=cache_status`
-  - `odata.php?action=cache_delete`
-  - `odata.php?action=cache_clear`
+- Bij een mislukte nightly-run de bestaande cache van dat bedrijf niet overschrijven.
 
 ## Bij toekomstige uitbreidingen
-- Extra velden eerst verifiëren in `BC Metadata.txt`.
+- Extra velden eerst verifiëren in `BC Webservices.txt` of `BC Metadata.txt`.
 - Alleen benodigde kolommen opvragen via `$select` voor performance.
 
 ## Code-structuur (PHP)

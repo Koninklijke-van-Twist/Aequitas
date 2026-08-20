@@ -9,57 +9,70 @@ error_reporting(E_ALL);
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/logincheck.php';
 require_once __DIR__ . '/localization.php';
-require_once __DIR__ . '/odata.php';
-require_once __DIR__ . '/auth_helper.php';
-require_once __DIR__ . '/timesheet_data.php';
+require_once __DIR__ . '/aequitas_data.php';
 
 /**
  * Functies
  */
 
-function seshat_h(?string $value): string
+function aequitas_h(?string $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-function seshat_url(array $params = []): string
+function aequitas_format_number(float $value): string
 {
-    $query = $_GET;
-    foreach ($params as $key => $value) {
-        if ($value === null || $value === '') {
-            unset($query[$key]);
-            continue;
-        }
-        $query[$key] = $value;
+    if (abs($value - round($value)) < 0.00001) {
+        return number_format($value, 0, ',', '.');
     }
-    unset($query['lang'], $query['_loaded'], $query['export']);
 
-    $path = strtok((string) ($_SERVER['REQUEST_URI'] ?? 'index.php'), '?') ?: 'index.php';
-    $query['lang'] = getCurrentLanguage();
-
-    return $path . '?' . http_build_query($query);
+    return number_format($value, 2, ',', '.');
 }
 
-function seshat_parse_date_param(string $value): string
+function aequitas_format_money(float $value): string
 {
-    $value = trim($value);
-    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) !== 1) {
+    return number_format($value, 2, ',', '.');
+}
+
+function aequitas_format_date(string $value): string
+{
+    if ($value === '') {
         return '';
     }
 
-    $parts = explode('-', $value);
-    if (!checkdate((int) $parts[1], (int) $parts[2], (int) $parts[0])) {
-        return '';
+    $date = DateTimeImmutable::createFromFormat('Y-m-d', $value);
+    if ($date instanceof DateTimeImmutable) {
+        return $date->format('d-m-Y');
     }
 
     return $value;
+}
+
+function aequitas_row_search_text(array $row): string
+{
+    $parts = [
+        $row['item_no'] ?? '',
+        $row['description'] ?? '',
+        $row['vendor_no'] ?? '',
+        $row['vendor_name'] ?? '',
+        aequitas_format_money((float) ($row['last_direct_cost'] ?? 0)),
+        aequitas_format_number((float) ($row['minimum_quantity'] ?? 0)),
+        $row['base_unit'] ?? '',
+        $row['unit'] ?? '',
+        aequitas_format_money((float) ($row['purchase_price'] ?? 0)),
+        aequitas_format_date((string) ($row['starting_date'] ?? '')),
+        aequitas_format_date((string) ($row['ending_date'] ?? '')),
+        aequitas_format_money((float) ($row['settlement_price'] ?? 0)),
+    ];
+
+    return strtolower(implode(' ', array_map('strval', $parts)));
 }
 
 /**
  * Page load
  */
 
-$companies = bc_companies_for_page();
+$companies = aequitas_cached_companies();
 $prefEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
 $savedCompany = '';
 if ($prefEmail !== '') {
@@ -78,293 +91,245 @@ if ($requestedCompany !== '' && in_array($requestedCompany, $companies, true)) {
     $company = (string) ($companies[0] ?? '');
 }
 
-$dateFrom = seshat_parse_date_param((string) ($_GET['date_from'] ?? ''));
-$dateTo = seshat_parse_date_param((string) ($_GET['date_to'] ?? ''));
-if ($dateFrom === '') {
-    $dateFrom = seshat_default_date_from();
-}
-if ($dateTo === '') {
-    $dateTo = seshat_default_date_to();
-}
-if ($dateFrom > $dateTo) {
-    [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
-}
+$cache = $company !== '' ? aequitas_read_company_cache($company) : null;
+$cachedAt = (int) ($cache['_meta']['cached_at'] ?? 0);
+$cacheStale = $cache !== null && $cachedAt > 0 && (time() - $cachedAt) > 129600;
+$rows = [];
+$vendors = [];
 
-auth_set_current_company_context($company);
-
-$errorKey = '';
-$dashboard = [
-    'cards' => [],
-    'person_summary' => [],
-    'weekly_summary' => [],
-    'week_groups' => [],
-    'productive_types' => seshat_productive_work_types(),
-    'leave_types' => seshat_leave_work_types(),
-    'ignored_types' => seshat_ignored_work_types(),
-    'last_week' => seshat_last_week_range(),
-];
-
-if (isset($_GET['export']) && $_GET['export'] === 'excel') {
-    try {
-        $hiddenCategories = seshat_parse_hidden_categories((string) ($_GET['hide'] ?? ''));
-        $exportData = seshat_filter_dashboard(
-            seshat_build_dashboard($company, $dateFrom, $dateTo),
-            $hiddenCategories
-        );
-        $filename = 'seshat_' . seshat_company_slug($company) . '_' . $dateFrom . '_' . $dateTo . '.xlsx';
-        $binary = seshat_build_excel_xlsx(
-            $exportData['person_summary'] ?? [],
-            $exportData['weekly_summary'] ?? []
-        );
-        header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Content-Length: ' . (string) strlen($binary));
-        echo $binary;
-        exit;
-    } catch (Throwable $exportError) {
-        $errorKey = 'seshat.error.load_failed';
-    }
+if (is_array($cache)) {
+    $rows = aequitas_build_table_rows(
+        is_array($cache['items'] ?? null) ? $cache['items'] : [],
+        is_array($cache['price_lines'] ?? null) ? $cache['price_lines'] : []
+    );
+    $vendors = aequitas_vendor_options($rows);
 }
 
-try {
-    $dashboard = seshat_build_dashboard($company, $dateFrom, $dateTo);
-} catch (Throwable $loadError) {
-    $errorKey = 'seshat.error.load_failed';
-}
-
-$dashboardJson = json_encode($dashboard, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
-if ($dashboardJson === false) {
-    $dashboardJson = '{}';
-}
-
-$legendLabelsJson = json_encode([
-    'productive' => LOC('seshat.legend.productive'),
-    'unproductive' => LOC('seshat.legend.unproductive'),
-    'leave' => LOC('seshat.legend.leave'),
-], JSON_UNESCAPED_UNICODE);
-if ($legendLabelsJson === false) {
-    $legendLabelsJson = '{}';
-}
-
-$uiLabelsJson = json_encode([
-    'last_week_orders' => LOC('seshat.card.last_week_orders'),
-    'total_hours' => LOC('seshat.card.total_hours'),
-    'employee' => LOC('seshat.col.employee'),
-    'avg_productivity' => LOC('seshat.col.avg_productivity'),
-    'productivity' => LOC('seshat.col.productivity'),
-    'hours_total' => LOC('seshat.modal.hours_total'),
-    'hours_productive' => LOC('seshat.modal.hours_productive'),
-    'section_person_summary' => LOC('seshat.section.person_summary'),
-    'section_week_blocks' => LOC('seshat.section.week_blocks'),
-], JSON_UNESCAPED_UNICODE);
-if ($uiLabelsJson === false) {
-    $uiLabelsJson = '{}';
+$cachedAtLabel = '';
+if ($cachedAt > 0) {
+    $cachedAtLabel = (new DateTimeImmutable('@' . $cachedAt))->setTimezone(new DateTimeZone(date_default_timezone_get()))->format('d-m-Y H:i');
 }
 
 ?><!DOCTYPE html>
-<html lang="<?= seshat_h(getHtmlLang()) ?>">
+<html lang="<?= aequitas_h(getHtmlLang()) ?>">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title><?= seshat_h(LOC('app.title')) ?></title>
+    <title><?= aequitas_h(LOC('app.title')) ?></title>
     <link rel="stylesheet" href="brand.css">
     <link rel="manifest" href="site.webmanifest">
     <link rel="icon" href="doc.svg" type="image/svg+xml">
     <?php renderLanguageSwitcherStyles(); ?>
     <style>
-        .seshat-page { max-width: 1700px; margin: 0 auto; padding: 16px; }
-        .seshat-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-        .seshat-header img { max-height: 42px; width: auto; }
-        .seshat-header-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-left: auto; }
-        .seshat-card { background: var(--kvt-panel-bg); border: 1px solid var(--kvt-line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-        .seshat-card h1, .seshat-card h2, .seshat-card h3 { margin: 0 0 12px; color: var(--kvt-text); }
-        .seshat-subtitle { color: var(--kvt-muted); margin: 6px 0 0; }
-        .seshat-form { display: grid; gap: 12px; }
-        .seshat-form-grid, .seshat-form-dates { display: grid; gap: 12px; }
-        .seshat-form label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-muted); }
-        .seshat-form input, .seshat-form select, .seshat-btn { font: inherit; border-radius: 10px; border: 1px solid var(--kvt-line); padding: 12px 14px; }
-        .seshat-form input, .seshat-form select { width: 100%; box-sizing: border-box; }
-        .seshat-btn { background: var(--kvt-main-blue); color: #fff; border-color: var(--kvt-main-blue); cursor: pointer; text-decoration: none; display: inline-block; text-align: center; }
-        .seshat-btn-secondary { background: #fff; color: var(--kvt-main-blue); }
-        .seshat-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-        .seshat-alert { border: 1px solid #fecaca; background: #fef2f2; color: var(--kvt-danger); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
-        .seshat-muted { color: var(--kvt-muted); font-size: 0.92rem; }
-        .seshat-config-note { font-size: 0.88rem; color: var(--kvt-muted); margin-top: 8px; }
-        .seshat-config-note code { font-size: 0.85em; }
-        .seshat-cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-        .seshat-person-card { border: 1px solid var(--kvt-line); border-radius: 12px; padding: 14px; background: #fff; cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease; }
-        .seshat-person-card:hover { box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); transform: translateY(-1px); }
-        .seshat-person-name { font-family: var(--kvt-font-display); font-size: 1.05rem; margin: 0 0 12px; }
-        .seshat-pie { width: 96px; height: 96px; border-radius: 50%; margin: 0 auto 12px; position: relative; }
-        .seshat-pie-center { position: absolute; inset: 22px; background: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.82rem; font-weight: 700; color: var(--kvt-text); }
-        .seshat-stat { display: flex; justify-content: space-between; gap: 8px; font-size: 0.92rem; margin-top: 6px; }
-        .seshat-stat-label { color: var(--kvt-muted); }
-        .seshat-stat-value { font-weight: 700; font-variant-numeric: tabular-nums; }
-        .seshat-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; font-size: 0.82rem; color: var(--kvt-muted); margin-bottom: 12px; }
-        .seshat-legend-toggle { border: 1px solid var(--kvt-line); background: #fff; border-radius: 999px; padding: 8px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 0.82rem; color: var(--kvt-text); }
-        .seshat-legend-toggle.is-hidden { opacity: 0.45; text-decoration: line-through; }
-        .seshat-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
-        .seshat-dot-productive { background: #15803d; }
-        .seshat-dot-unproductive { background: var(--kvt-danger); }
-        .seshat-dot-leave { background: var(--kvt-main-blue); }
-        .seshat-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        table.seshat-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; min-width: 520px; }
-        table.seshat-table th, table.seshat-table td { border-bottom: 1px solid var(--kvt-line); padding: 10px 8px; text-align: left; vertical-align: top; }
-        table.seshat-table th { color: var(--kvt-muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; user-select: none; white-space: nowrap; }
-        table.seshat-table th.is-sorted-asc::after { content: ' ▲'; font-size: 0.72rem; }
-        table.seshat-table th.is-sorted-desc::after { content: ' ▼'; font-size: 0.72rem; }
-        table.seshat-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .seshat-week-blocks { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(640px, 1fr)); }
-        .seshat-week-block { border: 1px solid var(--kvt-line); border-radius: 12px; padding: 12px; background: #fff; }
-        .seshat-week-block h3 { font-size: 1rem; margin-bottom: 8px; }
-        .seshat-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: none; align-items: flex-end; justify-content: center; z-index: 13000; padding: 0; }
-        .seshat-modal-backdrop.is-open { display: flex; }
-        .seshat-modal { width: min(960px, 100%); max-height: 92vh; overflow: auto; background: #fff; border-radius: 16px 16px 0 0; padding: 16px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25); }
-        .seshat-modal-header { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 12px; position: sticky; top: 0; background: #fff; padding-bottom: 8px; border-bottom: 1px solid var(--kvt-line); }
-        .seshat-modal-close { border: 0; background: transparent; font-size: 1.4rem; line-height: 1; cursor: pointer; color: var(--kvt-muted); padding: 4px 8px; }
-        .seshat-accordion { display: grid; gap: 10px; }
-        .seshat-accordion-item { border: 1px solid var(--kvt-line); border-radius: 10px; overflow: hidden; }
-        .seshat-accordion-trigger { width: 100%; text-align: left; border: 0; background: #f8fafc; padding: 12px 14px; font: inherit; font-weight: 700; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; }
-        .seshat-accordion-panel { display: none; padding: 0 8px 8px; }
-        .seshat-accordion-item.is-open .seshat-accordion-panel { display: block; }
-        .seshat-loader { position: fixed; inset: 0; z-index: 12000; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(255, 255, 255, 0.92); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.2s ease, visibility 0.2s ease; }
-        .seshat-loader.is-visible { opacity: 1; visibility: visible; pointer-events: auto; }
-        .seshat-loader-panel { display: grid; gap: 12px; justify-items: center; max-width: 280px; text-align: center; color: var(--kvt-text); }
-        .seshat-loader-spinner { width: 42px; height: 42px; border: 3px solid rgba(0, 153, 204, 0.2); border-top-color: var(--kvt-main-blue); border-radius: 50%; animation: seshat-spin 0.8s linear infinite; }
-        @keyframes seshat-spin { to { transform: rotate(360deg); } }
-        @media (min-width: 640px) {
-            .seshat-form-grid { grid-template-columns: 1fr 2fr auto auto; align-items: end; }
-            .seshat-form-dates { grid-template-columns: 1fr 1fr; }
-            .seshat-modal-backdrop { align-items: center; padding: 24px; }
-            .seshat-modal { border-radius: 16px; }
+        .aequitas-page { max-width: 1700px; margin: 0 auto; padding: 16px; }
+        .aequitas-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .aequitas-header img { max-height: 42px; width: auto; }
+        .aequitas-header-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-left: auto; }
+        .aequitas-card { background: var(--kvt-panel-bg); border: 1px solid var(--kvt-line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+        .aequitas-card h1, .aequitas-card h2 { margin: 0 0 12px; color: var(--kvt-text); }
+        .aequitas-subtitle, .aequitas-meta { color: var(--kvt-muted); margin: 6px 0 0; }
+        .aequitas-meta { font-size: 0.92rem; }
+        .aequitas-form { display: grid; gap: 12px; margin-top: 16px; }
+        .aequitas-form-grid { display: grid; gap: 12px; }
+        .aequitas-form label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-muted); }
+        .aequitas-form input, .aequitas-form select { font: inherit; border-radius: 10px; border: 1px solid var(--kvt-line); padding: 12px 14px; width: 100%; box-sizing: border-box; }
+        .aequitas-search { width: 100%; }
+        .aequitas-alert { border: 1px solid #fecaca; background: #fef2f2; color: var(--kvt-danger); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+        .aequitas-alert-warn { border-color: #fdba74; background: #fff7ed; color: #9a3412; }
+        .aequitas-muted { color: var(--kvt-muted); }
+        .aequitas-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        table.aequitas-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; min-width: 980px; }
+        table.aequitas-table th, table.aequitas-table td { border-bottom: 1px solid var(--kvt-line); padding: 10px 8px; text-align: left; vertical-align: top; background: #fff; }
+        table.aequitas-table th { color: var(--kvt-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap; position: sticky; top: 0; z-index: 2; }
+        table.aequitas-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        table.aequitas-table th:first-child, table.aequitas-table td:first-child { position: sticky; left: 0; z-index: 1; min-width: 110px; }
+        table.aequitas-table th:first-child { z-index: 3; }
+        .aequitas-row-mismatch td { background: #ffedd5; }
+        .aequitas-row-conflict { cursor: pointer; }
+        .aequitas-row-conflict td { background: #fecaca; animation: aequitas-blink 1.1s ease-in-out infinite; }
+        .aequitas-row-hidden { display: none; }
+        .aequitas-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: none; align-items: flex-end; justify-content: center; z-index: 13000; padding: 0; }
+        .aequitas-modal-backdrop.is-open { display: flex; }
+        .aequitas-modal { width: min(960px, 100%); max-height: 92vh; overflow: auto; background: #fff; border-radius: 16px 16px 0 0; padding: 16px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25); }
+        .aequitas-modal-header { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 12px; position: sticky; top: 0; background: #fff; padding-bottom: 8px; border-bottom: 1px solid var(--kvt-line); }
+        .aequitas-modal-close { border: 0; background: transparent; font-size: 1.4rem; line-height: 1; cursor: pointer; color: var(--kvt-muted); padding: 4px 8px; }
+        .aequitas-modal-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+        .aequitas-modal-table th, .aequitas-modal-table td { border-bottom: 1px solid var(--kvt-line); padding: 8px 6px; text-align: left; }
+        .aequitas-modal-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        @keyframes aequitas-blink {
+            0%, 100% { background: #fecaca; }
+            50% { background: #ef4444; color: #fff; }
+        }
+        @media (min-width: 720px) {
+            .aequitas-form-grid { grid-template-columns: 1fr 1fr; }
+            .aequitas-modal-backdrop { align-items: center; padding: 24px; }
+            .aequitas-modal { border-radius: 16px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .aequitas-row-conflict td { animation: none; background: #ef4444; color: #fff; }
         }
     </style>
 </head>
 <body>
-<div class="seshat-page">
-    <header class="seshat-header">
+<div class="aequitas-page">
+    <header class="aequitas-header">
         <img src="logo-website.png" alt="KVT">
-        <div class="seshat-header-actions">
+        <div class="aequitas-header-actions">
+            <?php if ($companies !== []): ?>
+                <form method="get" action="index.php">
+                    <label class="aequitas-muted" style="display:grid;gap:6px;font-weight:700;">
+                        <?= aequitas_h(LOC('aequitas.label.company')) ?>
+                        <select name="company" onchange="this.form.submit()">
+                            <?php foreach ($companies as $companyOption): ?>
+                                <option value="<?= aequitas_h($companyOption) ?>"<?= $companyOption === $company ? ' selected' : '' ?>><?= aequitas_h($companyOption) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                </form>
+            <?php endif; ?>
             <?php renderLanguageSwitcher(); ?>
         </div>
     </header>
 
-    <section class="seshat-card">
-        <h1 class="brand-display"><?= seshat_h(LOC('seshat.hero.title')) ?></h1>
-        <p class="seshat-subtitle"><?= seshat_h(LOC('seshat.hero.subtitle')) ?></p>
+    <section class="aequitas-card">
+        <h1 class="brand-display"><?= aequitas_h(LOC('aequitas.hero.title')) ?></h1>
+        <p class="aequitas-subtitle"><?= aequitas_h(LOC('aequitas.hero.subtitle')) ?></p>
+        <?php if ($cachedAtLabel !== ''): ?>
+            <p class="aequitas-meta"><?= aequitas_h(LOC('aequitas.cached_at', $cachedAtLabel)) ?> · <span id="aequitas-row-count"><?= aequitas_h(LOC('aequitas.row_count', count($rows))) ?></span></p>
+        <?php endif; ?>
 
-        <form class="seshat-form seshat-nav" method="get" action="index.php" style="margin-top: 16px;">
-            <input type="hidden" name="lang" value="<?= seshat_h(getCurrentLanguage()) ?>">
-            <div class="seshat-form-grid">
+        <div class="aequitas-form">
+            <div class="aequitas-form-grid">
                 <label>
-                    <?= seshat_h(LOC('seshat.label.company')) ?>
-                    <select name="company">
-                        <?php foreach ($companies as $companyOption): ?>
-                            <option value="<?= seshat_h($companyOption) ?>"<?= $companyOption === $company ? ' selected' : '' ?>><?= seshat_h($companyOption) ?></option>
+                    <?= aequitas_h(LOC('aequitas.label.item_no')) ?>
+                    <input type="search" id="aequitas-filter-item" placeholder="<?= aequitas_h(LOC('aequitas.placeholder.item_no')) ?>" autocomplete="off">
+                </label>
+                <label>
+                    <?= aequitas_h(LOC('aequitas.label.vendor')) ?>
+                    <select id="aequitas-filter-vendor">
+                        <option value=""><?= aequitas_h(LOC('aequitas.placeholder.vendor')) ?></option>
+                        <?php foreach ($vendors as $vendorNo => $vendorLabel): ?>
+                            <option value="<?= aequitas_h((string) $vendorNo) ?>"><?= aequitas_h($vendorLabel) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </label>
-                <div class="seshat-form-dates">
-                    <label>
-                        <?= seshat_h(LOC('seshat.label.date_from')) ?>
-                        <input type="date" name="date_from" value="<?= seshat_h($dateFrom) ?>">
-                    </label>
-                    <label>
-                        <?= seshat_h(LOC('seshat.label.date_to')) ?>
-                        <input type="date" name="date_to" value="<?= seshat_h($dateTo) ?>">
-                    </label>
-                </div>
-                <button class="seshat-btn" type="submit"><?= seshat_h(LOC('seshat.btn.load')) ?></button>
-                <button class="seshat-btn seshat-btn-secondary" type="button" id="seshat-export-excel"><?= seshat_h(LOC('seshat.btn.excel')) ?></button>
             </div>
-        </form>
+            <label>
+                <?= aequitas_h(LOC('aequitas.label.search')) ?>
+                <input class="aequitas-search" type="search" id="aequitas-filter-search" placeholder="<?= aequitas_h(LOC('aequitas.placeholder.search')) ?>" autocomplete="off">
+            </label>
+        </div>
     </section>
 
-    <?php if ($errorKey !== ''): ?>
-        <div class="seshat-alert"><?= seshat_h(LOC($errorKey)) ?></div>
+    <?php if ($cache === null): ?>
+        <div class="aequitas-alert"><?= aequitas_h(LOC('aequitas.empty.cache')) ?></div>
+    <?php elseif ($cacheStale): ?>
+        <div class="aequitas-alert aequitas-alert-warn"><?= aequitas_h(LOC('aequitas.stale.cache')) ?></div>
     <?php endif; ?>
 
-    <?php if ($dashboard['cards'] === [] && $errorKey === ''): ?>
-        <section class="seshat-card">
-            <p class="seshat-muted"><?= seshat_h(LOC('seshat.empty.cards')) ?></p>
-        </section>
-    <?php endif; ?>
-
-    <?php if ($dashboard['cards'] !== []): ?>
-        <section class="seshat-card" id="seshat-cards-section">
-            <h2><?= seshat_h(LOC('seshat.section.cards')) ?></h2>
-            <div class="seshat-legend" id="seshat-category-legend"></div>
-            <div class="seshat-cards" id="seshat-cards"></div>
-        </section>
-
-        <section class="seshat-card" id="seshat-person-summary-section">
-            <h2><?= seshat_h(LOC('seshat.section.person_summary')) ?></h2>
-            <div class="seshat-table-wrap" id="seshat-person-summary"></div>
-        </section>
-
-        <section class="seshat-card" id="seshat-week-blocks-section">
-            <h2><?= seshat_h(LOC('seshat.section.week_blocks')) ?></h2>
-            <div class="seshat-week-blocks" id="seshat-week-blocks"></div>
+    <?php if ($cache !== null && $rows === []): ?>
+        <section class="aequitas-card">
+            <p class="aequitas-muted"><?= aequitas_h(LOC('aequitas.empty.rows')) ?></p>
         </section>
     <?php endif; ?>
 
-    <?= injectTimerHtml([
-        'endpoint' => 'odata.php',
-        'position' => 'bottom-right',
-    ]) ?>
-</div>
-
-<div id="seshat-modal-backdrop" class="seshat-modal-backdrop" aria-hidden="true">
-    <div class="seshat-modal" role="dialog" aria-modal="true" aria-labelledby="seshat-modal-title">
-        <div class="seshat-modal-header">
-            <div>
-                <h2 id="seshat-modal-title"></h2>
-                <p class="seshat-muted" id="seshat-modal-subtitle"></p>
+    <?php if ($rows !== []): ?>
+        <section class="aequitas-card">
+            <div class="aequitas-table-wrap">
+                <table class="aequitas-table" id="aequitas-table">
+                    <thead>
+                        <tr>
+                            <th><?= aequitas_h(LOC('aequitas.col.item_no')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.description')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.vendor_no')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.last_direct_cost')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.minimum_quantity')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.base_unit')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.unit')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.purchase_price')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.starting_date')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.ending_date')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.settlement_price')) ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($rows as $row): ?>
+                            <?php
+                            $classes = [];
+                            if (!empty($row['conflict'])) {
+                                $classes[] = 'aequitas-row-conflict';
+                            } elseif (!empty($row['price_mismatch'])) {
+                                $classes[] = 'aequitas-row-mismatch';
+                            }
+                            $conflictJson = '';
+                            if (!empty($row['conflict'])) {
+                                $encoded = json_encode($row['conflicts'], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+                                $conflictJson = is_string($encoded) ? $encoded : '[]';
+                            }
+                            ?>
+                            <tr
+                                class="<?= aequitas_h(implode(' ', $classes)) ?>"
+                                data-item="<?= aequitas_h((string) $row['item_no']) ?>"
+                                data-vendor="<?= aequitas_h((string) $row['vendor_no']) ?>"
+                                data-search="<?= aequitas_h(aequitas_row_search_text($row)) ?>"
+                                <?php if ($conflictJson !== ''): ?>
+                                    data-conflicts="<?= aequitas_h($conflictJson) ?>"
+                                    tabindex="0"
+                                <?php endif; ?>
+                            >
+                                <td><?= aequitas_h((string) $row['item_no']) ?></td>
+                                <td><?= aequitas_h((string) $row['description']) ?></td>
+                                <td><?= aequitas_h((string) $row['vendor_no']) ?></td>
+                                <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['last_direct_cost'])) ?></td>
+                                <td class="num"><?= aequitas_h(aequitas_format_number((float) $row['minimum_quantity'])) ?></td>
+                                <td><?= aequitas_h((string) $row['base_unit']) ?></td>
+                                <td><?= aequitas_h((string) $row['unit']) ?></td>
+                                <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['purchase_price'])) ?></td>
+                                <td><?= aequitas_h(aequitas_format_date((string) $row['starting_date'])) ?></td>
+                                <td><?= aequitas_h(aequitas_format_date((string) $row['ending_date'])) ?></td>
+                                <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['settlement_price'])) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
-            <button type="button" class="seshat-modal-close" id="seshat-modal-close" aria-label="<?= seshat_h(LOC('seshat.modal.close')) ?>">&times;</button>
+        </section>
+    <?php endif; ?>
+</div>
+
+<div id="aequitas-modal-backdrop" class="aequitas-modal-backdrop" aria-hidden="true">
+    <div class="aequitas-modal" role="dialog" aria-modal="true" aria-labelledby="aequitas-modal-title">
+        <div class="aequitas-modal-header">
+            <h2 id="aequitas-modal-title"><?= aequitas_h(LOC('aequitas.modal.title')) ?></h2>
+            <button type="button" class="aequitas-modal-close" id="aequitas-modal-close" aria-label="<?= aequitas_h(LOC('aequitas.modal.close')) ?>">&times;</button>
         </div>
-        <div class="seshat-accordion" id="seshat-modal-accordion"></div>
+        <div class="aequitas-table-wrap" id="aequitas-modal-body"></div>
     </div>
 </div>
 
-<div id="seshat-loader" class="seshat-loader" aria-hidden="true" aria-busy="false">
-    <div class="seshat-loader-panel">
-        <div class="seshat-loader-spinner" aria-hidden="true"></div>
-        <p><?= seshat_h(LOC('seshat.loader.loading')) ?></p>
-    </div>
-</div>
-
+<?php renderLanguageSwitcherScript(); ?>
 <script>
 (function () {
-    var dashboardData = <?= $dashboardJson ?>;
-    var legendLabels = <?= $legendLabelsJson ?>;
-    var uiLabels = <?= $uiLabelsJson ?>;
-    var dayLabels = <?= json_encode([
-        LOC('seshat.day.mon'),
-        LOC('seshat.day.tue'),
-        LOC('seshat.day.wed'),
-        LOC('seshat.day.thu'),
-        LOC('seshat.day.fri'),
-        LOC('seshat.day.sat'),
-        LOC('seshat.day.sun'),
+    var itemFilter = document.getElementById('aequitas-filter-item');
+    var vendorFilter = document.getElementById('aequitas-filter-vendor');
+    var searchFilter = document.getElementById('aequitas-filter-search');
+    var table = document.getElementById('aequitas-table');
+    var rowCount = document.getElementById('aequitas-row-count');
+    var backdrop = document.getElementById('aequitas-modal-backdrop');
+    var modalBody = document.getElementById('aequitas-modal-body');
+    var modalClose = document.getElementById('aequitas-modal-close');
+    var labels = <?= json_encode([
+        'row_count' => LOC('aequitas.row_count'),
+        'price_list' => LOC('aequitas.col.price_list'),
+        'line_no' => LOC('aequitas.col.line_no'),
+        'vendor_no' => LOC('aequitas.col.vendor_no'),
+        'description' => LOC('aequitas.col.description'),
+        'minimum_quantity' => LOC('aequitas.col.minimum_quantity'),
+        'unit' => LOC('aequitas.col.unit'),
+        'purchase_price' => LOC('aequitas.col.purchase_price'),
+        'starting_date' => LOC('aequitas.col.starting_date'),
+        'ending_date' => LOC('aequitas.col.ending_date'),
     ], JSON_UNESCAPED_UNICODE) ?>;
-
-    var categories = ['productive', 'unproductive', 'leave'];
-    var hiddenCategories = new Set();
-    var filteredDashboard = dashboardData;
-    var openModalKey = null;
-
-    var legendRoot = document.getElementById('seshat-category-legend');
-    var cardsRoot = document.getElementById('seshat-cards');
-    var personSummaryRoot = document.getElementById('seshat-person-summary');
-    var weekBlocksRoot = document.getElementById('seshat-week-blocks');
-    var exportButton = document.getElementById('seshat-export-excel');
-    var modalBackdrop = document.getElementById('seshat-modal-backdrop');
-    var modalTitle = document.getElementById('seshat-modal-title');
-    var modalSubtitle = document.getElementById('seshat-modal-subtitle');
-    var modalAccordion = document.getElementById('seshat-modal-accordion');
-    var modalClose = document.getElementById('seshat-modal-close');
 
     function escapeHtml(value) {
         return String(value)
@@ -374,510 +339,158 @@ if ($uiLabelsJson === false) {
             .replace(/"/g, '&quot;');
     }
 
-    function formatHours(value) {
+    function formatNumber(value) {
         var num = Number(value || 0);
-        if (Math.abs(num - Math.round(num)) < 0.00001) {
-            return String(Math.round(num));
+        return new Intl.NumberFormat('nl-NL', {
+            minimumFractionDigits: Math.abs(num - Math.round(num)) < 0.00001 ? 0 : 2,
+            maximumFractionDigits: 2
+        }).format(num);
+    }
+
+    function formatDate(value) {
+        var text = String(value || '');
+        var match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!match) {
+            return text;
         }
-        return num.toFixed(2).replace('.', ',');
+        return match[3] + '-' + match[2] + '-' + match[1];
     }
 
-    function formatPercent(value) {
-        var num = Number(value || 0);
-        if (Math.abs(num - Math.round(num)) < 0.00001) {
-            return String(Math.round(num));
-        }
-        return num.toFixed(1).replace('.', ',');
-    }
-
-    function calcProductivity(productive, unproductive) {
-        var workTotal = Number(productive || 0) + Number(unproductive || 0);
-        if (workTotal <= 0) {
-            return 0;
-        }
-        return Math.round((Number(productive || 0) / workTotal) * 1000) / 10;
-    }
-
-    function categoryHours(hoursByCategory) {
-        var productive = hiddenCategories.has('productive') ? 0 : Number(hoursByCategory.productive || 0);
-        var unproductive = hiddenCategories.has('unproductive') ? 0 : Number(hoursByCategory.unproductive || 0);
-        var leave = hiddenCategories.has('leave') ? 0 : Number(hoursByCategory.leave || 0);
-        return {
-            productive: productive,
-            unproductive: unproductive,
-            leave: leave,
-            total: productive + unproductive + leave,
-            productivity: calcProductivity(productive, unproductive)
-        };
-    }
-
-    function filterModalWorkOrders(workOrders) {
-        var filtered = [];
-        (workOrders || []).forEach(function (workOrder) {
-            var visibleLines = [];
-            var hoursByCategory = { productive: 0, unproductive: 0, leave: 0 };
-            (workOrder.lines || []).forEach(function (line) {
-                var classification = line.classification || 'unproductive';
-                if (hiddenCategories.has(classification)) {
-                    return;
-                }
-                visibleLines.push(line);
-                hoursByCategory[classification] = (hoursByCategory[classification] || 0) + Number(line.total_hours || 0);
-            });
-            if (visibleLines.length === 0) {
-                return;
-            }
-            var summary = categoryHours(hoursByCategory);
-            filtered.push({
-                work_order_no: workOrder.work_order_no || '',
-                total_hours: Math.round(summary.total * 100) / 100,
-                productivity: summary.productivity,
-                lines: visibleLines
-            });
-        });
-        filtered.sort(function (a, b) {
-            return String(a.work_order_no).localeCompare(String(b.work_order_no));
-        });
-        return filtered;
-    }
-
-    function countLastWeekOrders(card) {
-        var lastWeek = dashboardData.last_week || {};
-        var refs = {};
-        filterModalWorkOrders(card.modal_work_orders || []).forEach(function (workOrder) {
-            (workOrder.lines || []).forEach(function (line) {
-                var weekStart = line.week_start || '';
-                if (weekStart >= (lastWeek.start || '') && weekStart <= (lastWeek.end || '')) {
-                    refs[line.work_order_no || workOrder.work_order_no || ''] = true;
-                }
-            });
-        });
-        return Object.keys(refs).filter(function (key) { return key !== ''; }).length;
-    }
-
-    function filterDashboard(data) {
-        var cards = [];
-        (data.cards || []).forEach(function (card) {
-            var summary = categoryHours({
-                productive: card.productive_hours,
-                unproductive: card.unproductive_hours,
-                leave: card.leave_hours
-            });
-            if (summary.total <= 0) {
-                return;
-            }
-            cards.push(Object.assign({}, card, {
-                productive_hours: Math.round(summary.productive * 100) / 100,
-                unproductive_hours: Math.round(summary.unproductive * 100) / 100,
-                leave_hours: Math.round(summary.leave * 100) / 100,
-                total_hours: Math.round(summary.total * 100) / 100,
-                productivity: summary.productivity,
-                modal_work_orders: filterModalWorkOrders(card.modal_work_orders || []),
-                last_week_count: countLastWeekOrders(card)
-            }));
-        });
-        cards.sort(function (a, b) {
-            var productivityCompare = Number(b.productivity || 0) - Number(a.productivity || 0);
-            if (productivityCompare !== 0) {
-                return productivityCompare;
-            }
-            return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
-        });
-
-        var weeklySummary = [];
-        (data.weekly_summary || []).forEach(function (row) {
-            var rowSummary = categoryHours({
-                productive: row.productive_hours,
-                unproductive: row.unproductive_hours,
-                leave: row.leave_hours
-            });
-            if (rowSummary.total <= 0) {
-                return;
-            }
-            weeklySummary.push(Object.assign({}, row, {
-                total_hours: Math.round(rowSummary.total * 100) / 100,
-                productivity: rowSummary.productivity
-            }));
-        });
-        weeklySummary.sort(function (a, b) {
-            if (Number(b.week_year) !== Number(a.week_year)) {
-                return Number(b.week_year) - Number(a.week_year);
-            }
-            if (Number(b.week_number) !== Number(a.week_number)) {
-                return Number(b.week_number) - Number(a.week_number);
-            }
-            return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
-        });
-
-        var productivityByPerson = {};
-        weeklySummary.forEach(function (row) {
-            if (!productivityByPerson[row.name]) {
-                productivityByPerson[row.name] = [];
-            }
-            productivityByPerson[row.name].push(Number(row.productivity || 0));
-        });
-
-        var personSummary = cards.map(function (card) {
-            var weeklyValues = productivityByPerson[card.name] || [];
-            var avgProductivity = weeklyValues.length
-                ? Math.round((weeklyValues.reduce(function (sum, value) { return sum + value; }, 0) / weeklyValues.length) * 10) / 10
-                : Number(card.productivity || 0);
-            return {
-                name: card.name,
-                total_hours: card.total_hours,
-                avg_productivity: avgProductivity
-            };
-        });
-
-        var weekGroups = {};
-        weeklySummary.forEach(function (row) {
-            if (!weekGroups[row.week_label]) {
-                weekGroups[row.week_label] = [];
-            }
-            weekGroups[row.week_label].push(row);
-        });
-
-        return {
-            cards: cards,
-            person_summary: personSummary,
-            weekly_summary: weeklySummary,
-            week_groups: weekGroups
-        };
-    }
-
-    function buildPieStyle(productive, unproductive, leave) {
-        var total = Number(productive || 0) + Number(unproductive || 0) + Number(leave || 0);
-        if (total <= 0) {
-            return 'background: #e5e7eb;';
-        }
-        var productivePct = (Number(productive || 0) / total) * 100;
-        var unproductivePct = productivePct + ((Number(unproductive || 0) / total) * 100);
-        return 'background: conic-gradient(#15803d 0 ' + productivePct + '%, var(--kvt-danger) ' + productivePct + '% ' + unproductivePct + '%, var(--kvt-main-blue) ' + unproductivePct + '% 100%);';
-    }
-
-    function formatWorkOrderSummary(workOrder) {
-        return formatHours(workOrder.total_hours) + ' uur, ' + formatPercent(workOrder.productivity) + '% ' + uiLabels.hours_productive;
-    }
-
-    function bindSortableTables(root) {
-        root.querySelectorAll('table[data-sortable="1"]').forEach(function (table) {
-            var headers = table.querySelectorAll('thead th[data-sort]');
-            headers.forEach(function (header, columnIndex) {
-                header.addEventListener('click', function () {
-                    var tbody = table.querySelector('tbody');
-                    if (!tbody) {
-                        return;
-                    }
-                    var current = header.classList.contains('is-sorted-asc') ? 'asc'
-                        : header.classList.contains('is-sorted-desc') ? 'desc'
-                        : '';
-                    var direction = current === 'asc' ? 'desc' : 'asc';
-                    var sortType = header.getAttribute('data-sort') || 'string';
-                    headers.forEach(function (otherHeader) {
-                        otherHeader.classList.remove('is-sorted-asc', 'is-sorted-desc');
-                    });
-                    header.classList.add(direction === 'asc' ? 'is-sorted-asc' : 'is-sorted-desc');
-                    var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
-                    rows.sort(function (a, b) {
-                        var aCell = a.children[columnIndex];
-                        var bCell = b.children[columnIndex];
-                        var aValue = aCell ? (aCell.getAttribute('data-value') || aCell.textContent || '') : '';
-                        var bValue = bCell ? (bCell.getAttribute('data-value') || bCell.textContent || '') : '';
-                        if (sortType === 'number') {
-                            return direction === 'asc' ? Number(aValue) - Number(bValue) : Number(bValue) - Number(aValue);
-                        }
-                        aValue = String(aValue).toLowerCase();
-                        bValue = String(bValue).toLowerCase();
-                        if (aValue < bValue) {
-                            return direction === 'asc' ? -1 : 1;
-                        }
-                        if (aValue > bValue) {
-                            return direction === 'asc' ? 1 : -1;
-                        }
-                        return 0;
-                    });
-                    rows.forEach(function (row) {
-                        tbody.appendChild(row);
-                    });
-                });
-            });
-        });
-    }
-
-    function renderLegend() {
-        if (!legendRoot) {
+    function applyFilters() {
+        if (!table) {
             return;
         }
-        legendRoot.innerHTML = categories.map(function (category) {
-            var hiddenClass = hiddenCategories.has(category) ? ' is-hidden' : '';
-            return '<button type="button" class="seshat-legend-toggle' + hiddenClass + '" data-category="' + category + '">'
-                + '<i class="seshat-dot seshat-dot-' + category + '"></i>'
-                + escapeHtml(legendLabels[category] || category)
-                + '</button>';
-        }).join('');
-        legendRoot.querySelectorAll('.seshat-legend-toggle').forEach(function (button) {
-            button.addEventListener('click', function () {
-                var category = button.getAttribute('data-category');
-                if (!category) {
-                    return;
-                }
-                if (hiddenCategories.has(category)) {
-                    hiddenCategories.delete(category);
-                    button.classList.remove('is-hidden');
-                } else {
-                    hiddenCategories.add(category);
-                    button.classList.add('is-hidden');
-                }
-                filteredDashboard = filterDashboard(dashboardData);
-                renderDashboard();
-                if (openModalKey !== null) {
-                    openModal(openModalKey);
-                }
-            });
+
+        var itemValue = (itemFilter && itemFilter.value ? itemFilter.value : '').trim().toLowerCase();
+        var vendorValue = (vendorFilter && vendorFilter.value ? vendorFilter.value : '').trim().toLowerCase();
+        var searchValue = (searchFilter && searchFilter.value ? searchFilter.value : '').trim().toLowerCase();
+        var rows = table.tBodies[0] ? Array.prototype.slice.call(table.tBodies[0].rows) : [];
+        var visible = 0;
+
+        rows.forEach(function (row) {
+            var itemNo = (row.getAttribute('data-item') || '').toLowerCase();
+            var vendorNo = (row.getAttribute('data-vendor') || '').toLowerCase();
+            var searchText = (row.getAttribute('data-search') || '').toLowerCase();
+            var show = true;
+
+            if (itemValue !== '' && itemNo.indexOf(itemValue) === -1) {
+                show = false;
+            }
+            if (show && vendorValue !== '' && vendorNo !== vendorValue) {
+                show = false;
+            }
+            if (show && searchValue !== '' && searchText.indexOf(searchValue) === -1) {
+                show = false;
+            }
+
+            row.classList.toggle('aequitas-row-hidden', !show);
+            if (show) {
+                visible += 1;
+            }
         });
-    }
 
-    function renderCards() {
-        if (!cardsRoot) {
-            return;
+        if (rowCount && labels.row_count) {
+            rowCount.textContent = String(labels.row_count).replace('%d', String(visible));
         }
-        cardsRoot.innerHTML = (filteredDashboard.cards || []).map(function (card, index) {
-            return ''
-                + '<article class="seshat-person-card" data-person-key="' + escapeHtml(card.key || String(index)) + '" tabindex="0" role="button" aria-label="' + escapeHtml(card.name || '') + '">'
-                + '<h3 class="seshat-person-name">' + escapeHtml(card.name || '') + '</h3>'
-                + '<div class="seshat-pie" style="' + buildPieStyle(card.productive_hours, card.unproductive_hours, card.leave_hours) + '">'
-                + '<div class="seshat-pie-center">' + escapeHtml(formatPercent(card.productivity) + '%') + '</div>'
-                + '</div>'
-                + '<div class="seshat-stat"><span class="seshat-stat-label">' + escapeHtml(uiLabels.last_week_orders) + '</span><span class="seshat-stat-value">' + escapeHtml(String(card.last_week_count || 0)) + '</span></div>'
-                + '<div class="seshat-stat"><span class="seshat-stat-label">' + escapeHtml(uiLabels.total_hours) + '</span><span class="seshat-stat-value">' + escapeHtml(formatHours(card.total_hours)) + '</span></div>'
-                + '</article>';
-        }).join('');
-        cardsRoot.querySelectorAll('.seshat-person-card').forEach(function (cardEl) {
-            cardEl.addEventListener('click', function () {
-                openModal(cardEl.getAttribute('data-person-key') || '');
-            });
-            cardEl.addEventListener('keydown', function (event) {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    openModal(cardEl.getAttribute('data-person-key') || '');
-                }
-            });
-        });
-    }
-
-    function renderPersonSummary() {
-        if (!personSummaryRoot) {
-            return;
-        }
-        var rows = filteredDashboard.person_summary || [];
-        personSummaryRoot.innerHTML = ''
-            + '<table class="seshat-table" data-sortable="1"><thead><tr>'
-            + '<th data-sort="string">' + escapeHtml(uiLabels.employee) + '</th>'
-            + '<th class="num" data-sort="number">' + escapeHtml(uiLabels.total_hours) + '</th>'
-            + '<th class="num" data-sort="number">' + escapeHtml(uiLabels.avg_productivity) + '</th>'
-            + '</tr></thead><tbody>'
-            + rows.map(function (row) {
-                return '<tr>'
-                    + '<td>' + escapeHtml(row.name || '') + '</td>'
-                    + '<td class="num" data-value="' + escapeHtml(String(row.total_hours || 0)) + '">' + escapeHtml(formatHours(row.total_hours)) + '</td>'
-                    + '<td class="num" data-value="' + escapeHtml(String(row.avg_productivity || 0)) + '">' + escapeHtml(formatPercent(row.avg_productivity) + '%') + '</td>'
-                    + '</tr>';
-            }).join('')
-            + '</tbody></table>';
-        bindSortableTables(personSummaryRoot);
-    }
-
-    function renderWeekBlocks() {
-        if (!weekBlocksRoot) {
-            return;
-        }
-        var weekGroups = filteredDashboard.week_groups || {};
-        weekBlocksRoot.innerHTML = Object.keys(weekGroups).map(function (weekLabel) {
-            var rows = weekGroups[weekLabel] || [];
-            return ''
-                + '<div class="seshat-week-block">'
-                + '<h3>' + escapeHtml(weekLabel) + '</h3>'
-                + '<div class="seshat-table-wrap">'
-                + '<table class="seshat-table" data-sortable="1"><thead><tr>'
-                + '<th data-sort="string">' + escapeHtml(uiLabels.employee) + '</th>'
-                + '<th class="num" data-sort="number">' + escapeHtml(uiLabels.total_hours) + '</th>'
-                + '<th class="num" data-sort="number">' + escapeHtml(uiLabels.productivity) + '</th>'
-                + '</tr></thead><tbody>'
-                + rows.map(function (row) {
-                    return '<tr>'
-                        + '<td>' + escapeHtml(row.name || '') + '</td>'
-                        + '<td class="num" data-value="' + escapeHtml(String(row.total_hours || 0)) + '">' + escapeHtml(formatHours(row.total_hours)) + '</td>'
-                        + '<td class="num" data-value="' + escapeHtml(String(row.productivity || 0)) + '">' + escapeHtml(formatPercent(row.productivity) + '%') + '</td>'
-                        + '</tr>';
-                }).join('')
-                + '</tbody></table></div></div>';
-        }).join('');
-        bindSortableTables(weekBlocksRoot);
-    }
-
-    function renderDashboard() {
-        renderCards();
-        renderPersonSummary();
-        renderWeekBlocks();
-    }
-
-    function openModal(personKey) {
-        var card = (filteredDashboard.cards || []).find(function (item) {
-            return String(item.key || '') === String(personKey || '');
-        });
-        if (!card) {
-            return;
-        }
-        openModalKey = personKey;
-        modalTitle.textContent = card.name || '';
-        modalSubtitle.textContent = formatHours(card.total_hours) + ' ' + uiLabels.hours_total;
-        modalAccordion.innerHTML = '';
-        (card.modal_work_orders || []).forEach(function (workOrder, woIndex) {
-            var item = document.createElement('div');
-            item.className = 'seshat-accordion-item' + (woIndex === 0 ? ' is-open' : '');
-            var trigger = document.createElement('button');
-            trigger.type = 'button';
-            trigger.className = 'seshat-accordion-trigger';
-            trigger.innerHTML = '<span>' + escapeHtml(workOrder.work_order_no || '') + '</span><span>' + escapeHtml(formatWorkOrderSummary(workOrder)) + '</span>';
-            var panel = document.createElement('div');
-            panel.className = 'seshat-accordion-panel';
-            var tableWrap = document.createElement('div');
-            tableWrap.className = 'seshat-table-wrap';
-            var table = document.createElement('table');
-            table.className = 'seshat-table';
-            table.innerHTML = '<thead><tr><th>Werkorder</th><th>Werksoort</th>'
-                + dayLabels.map(function (label) { return '<th class="num">' + label + '</th>'; }).join('')
-                + '<th class="num">Totaal</th></tr></thead>';
-            var tbody = document.createElement('tbody');
-            (workOrder.lines || []).forEach(function (line) {
-                var tr = document.createElement('tr');
-                var cells = [line.work_order_no || '', line.work_type_code || ''];
-                for (var day = 1; day <= 7; day++) {
-                    cells.push(formatHours((line.hours && line.hours[day]) || 0));
-                }
-                cells.push(formatHours(line.total_hours || 0));
-                tr.innerHTML = cells.map(function (value, cellIndex) {
-                    var cls = cellIndex >= 2 ? ' class="num"' : '';
-                    return '<td' + cls + '>' + escapeHtml(value) + '</td>';
-                }).join('');
-                tbody.appendChild(tr);
-            });
-            table.appendChild(tbody);
-            tableWrap.appendChild(table);
-            panel.appendChild(tableWrap);
-            trigger.addEventListener('click', function () {
-                item.classList.toggle('is-open');
-            });
-            item.appendChild(trigger);
-            item.appendChild(panel);
-            modalAccordion.appendChild(item);
-        });
-        modalBackdrop.classList.add('is-open');
-        modalBackdrop.setAttribute('aria-hidden', 'false');
     }
 
     function closeModal() {
-        openModalKey = null;
-        modalBackdrop.classList.remove('is-open');
-        modalBackdrop.setAttribute('aria-hidden', 'true');
-    }
-
-    if (cardsRoot) {
-        renderLegend();
-        filteredDashboard = filterDashboard(dashboardData);
-        renderDashboard();
-    }
-
-    modalClose.addEventListener('click', closeModal);
-    modalBackdrop.addEventListener('click', function (event) {
-        if (event.target === modalBackdrop) {
-            closeModal();
+        if (!backdrop) {
+            return;
         }
+        backdrop.classList.remove('is-open');
+        backdrop.setAttribute('aria-hidden', 'true');
+    }
+
+    function openConflicts(raw) {
+        var lines = [];
+        try {
+            lines = JSON.parse(raw || '[]');
+        } catch (error) {
+            lines = [];
+        }
+
+        if (!Array.isArray(lines) || !modalBody || !backdrop) {
+            return;
+        }
+
+        var html = '<table class="aequitas-modal-table"><thead><tr>';
+        html += '<th>' + escapeHtml(labels.price_list) + '</th>';
+        html += '<th>' + escapeHtml(labels.line_no) + '</th>';
+        html += '<th>' + escapeHtml(labels.vendor_no) + '</th>';
+        html += '<th>' + escapeHtml(labels.description) + '</th>';
+        html += '<th>' + escapeHtml(labels.minimum_quantity) + '</th>';
+        html += '<th>' + escapeHtml(labels.unit) + '</th>';
+        html += '<th>' + escapeHtml(labels.purchase_price) + '</th>';
+        html += '<th>' + escapeHtml(labels.starting_date) + '</th>';
+        html += '<th>' + escapeHtml(labels.ending_date) + '</th>';
+        html += '</tr></thead><tbody>';
+
+        lines.forEach(function (line) {
+            html += '<tr>';
+            html += '<td>' + escapeHtml(line.Price_List_Code || '') + '</td>';
+            html += '<td class="num">' + escapeHtml(line.Line_No || '') + '</td>';
+            html += '<td>' + escapeHtml(line.Source_No || '') + '</td>';
+            html += '<td>' + escapeHtml(line.Description || line.PriceListDescription || '') + '</td>';
+            html += '<td class="num">' + escapeHtml(formatNumber(line.Minimum_Quantity)) + '</td>';
+            html += '<td>' + escapeHtml(line.Unit_of_Measure_Code || '') + '</td>';
+            html += '<td class="num">' + escapeHtml(formatNumber(line.DirectUnitCost)) + '</td>';
+            html += '<td>' + escapeHtml(formatDate(line.Starting_Date)) + '</td>';
+            html += '<td>' + escapeHtml(formatDate(line.Ending_Date)) + '</td>';
+            html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+        modalBody.innerHTML = html;
+        backdrop.classList.add('is-open');
+        backdrop.setAttribute('aria-hidden', 'false');
+    }
+
+    [itemFilter, vendorFilter, searchFilter].forEach(function (input) {
+        if (!input) {
+            return;
+        }
+        input.addEventListener('input', applyFilters);
+        input.addEventListener('change', applyFilters);
     });
+
+    if (table) {
+        table.addEventListener('click', function (event) {
+            var row = event.target.closest('tr.aequitas-row-conflict');
+            if (!row) {
+                return;
+            }
+            openConflicts(row.getAttribute('data-conflicts'));
+        });
+
+        table.addEventListener('keydown', function (event) {
+            if (event.key !== 'Enter' && event.key !== ' ') {
+                return;
+            }
+            var row = event.target.closest('tr.aequitas-row-conflict');
+            if (!row) {
+                return;
+            }
+            event.preventDefault();
+            openConflicts(row.getAttribute('data-conflicts'));
+        });
+    }
+
+    if (modalClose) {
+        modalClose.addEventListener('click', closeModal);
+    }
+    if (backdrop) {
+        backdrop.addEventListener('click', function (event) {
+            if (event.target === backdrop) {
+                closeModal();
+            }
+        });
+    }
     document.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') {
             closeModal();
         }
     });
-
-    var DELAY_MS = 500;
-    var loader = document.getElementById('seshat-loader');
-    var timer = null;
-
-    function showLoader() {
-        if (!loader) {
-            return;
-        }
-        loader.classList.add('is-visible');
-        loader.setAttribute('aria-hidden', 'false');
-        loader.setAttribute('aria-busy', 'true');
-    }
-
-    function clearLoaderTimer() {
-        if (timer !== null) {
-            window.clearTimeout(timer);
-            timer = null;
-        }
-    }
-
-    document.addEventListener('submit', function (event) {
-        var form = event.target;
-        if (!(form instanceof HTMLFormElement) || !form.classList.contains('seshat-nav')) {
-            return;
-        }
-        clearLoaderTimer();
-        timer = window.setTimeout(showLoader, DELAY_MS);
-    }, true);
-
-    if (exportButton) {
-        exportButton.addEventListener('click', function () {
-            clearLoaderTimer();
-            timer = window.setTimeout(showLoader, DELAY_MS);
-
-            var params = new URLSearchParams(window.location.search);
-            params.set('export', 'excel');
-            if (hiddenCategories.size > 0) {
-                params.set('hide', Array.from(hiddenCategories).join(','));
-            } else {
-                params.delete('hide');
-            }
-
-            var exportUrl = 'index.php?' + params.toString();
-            fetch(exportUrl, { credentials: 'same-origin' })
-                .then(function (response) {
-                    if (!response.ok) {
-                        throw new Error('Export mislukt');
-                    }
-                    var disposition = response.headers.get('Content-Disposition') || '';
-                    var match = disposition.match(/filename="?([^"]+)"?/i);
-                    var filename = match ? match[1] : 'seshat.xlsx';
-                    return response.blob().then(function (blob) {
-                        return { blob: blob, filename: filename };
-                    });
-                })
-                .then(function (result) {
-                    var objectUrl = URL.createObjectURL(result.blob);
-                    var link = document.createElement('a');
-                    link.href = objectUrl;
-                    link.download = result.filename;
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
-                    URL.revokeObjectURL(objectUrl);
-                })
-                .catch(function () {
-                    window.alert('Excel-export mislukt. Probeer het later opnieuw.');
-                })
-                .finally(function () {
-                    clearLoaderTimer();
-                    if (loader) {
-                        loader.classList.remove('is-visible');
-                        loader.setAttribute('aria-hidden', 'true');
-                        loader.setAttribute('aria-busy', 'false');
-                    }
-                });
-        });
-    }
 })();
 </script>
 </body>
