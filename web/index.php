@@ -117,11 +117,34 @@ function aequitas_row_search_text(array $row): string
  * Page load
  */
 
+$aequitasPageSizeOptions = [25, 50, 100, 150, 200, 300, 500, 1000, 0];
+$aequitasDefaultPageSize = 100;
+
+if (isset($_GET['action']) && trim((string) $_GET['action']) === 'save_page_size') {
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
+    $prefEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
+    $requestedSize = (int) ($_GET['page_size'] ?? $aequitasDefaultPageSize);
+    if (!in_array($requestedSize, $aequitasPageSizeOptions, true)) {
+        $requestedSize = $aequitasDefaultPageSize;
+    }
+    if ($prefEmail !== '') {
+        saveUserPref($prefEmail, 'page_size', $requestedSize);
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo json_encode(['ok' => true, 'page_size' => $requestedSize], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $companies = aequitas_cached_companies();
 $prefEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
-$savedCompany = '';
-if ($prefEmail !== '') {
-    $savedCompany = trim((string) (loadUserPrefs($prefEmail)['company'] ?? ''));
+$userPrefs = $prefEmail !== '' ? loadUserPrefs($prefEmail) : [];
+$savedCompany = trim((string) ($userPrefs['company'] ?? ''));
+$savedPageSize = (int) ($userPrefs['page_size'] ?? $aequitasDefaultPageSize);
+if (!in_array($savedPageSize, $aequitasPageSizeOptions, true)) {
+    $savedPageSize = $aequitasDefaultPageSize;
 }
 
 $requestedCompany = trim((string) ($_GET['company'] ?? ''));
@@ -190,6 +213,11 @@ if ($cachedAt > 0) {
         .aequitas-delta-up { color: #b91c1c; }
         .aequitas-delta-down { color: #15803d; }
         .aequitas-delta-eq { color: #94a3b8; font-size: 1.05rem; }
+        .aequitas-pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; }
+        .aequitas-pager-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .aequitas-pager button { font: inherit; border: 1px solid var(--kvt-line); background: #fff; border-radius: 10px; padding: 10px 14px; cursor: pointer; color: var(--kvt-text); }
+        .aequitas-pager button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .aequitas-pager-status { color: var(--kvt-muted); font-size: 0.92rem; }
         .aequitas-row-mismatch td { background: #ffedd5; }
         .aequitas-row-conflict { cursor: pointer; }
         .aequitas-row-conflict td { background: #fecaca; animation: aequitas-blink 1.1s ease-in-out infinite; }
@@ -260,10 +288,22 @@ if ($cachedAt > 0) {
                     </select>
                 </label>
             </div>
-            <label>
-                <?= aequitas_h(LOC('aequitas.label.search')) ?>
-                <input class="aequitas-search" type="search" id="aequitas-filter-search" placeholder="<?= aequitas_h(LOC('aequitas.placeholder.search')) ?>" autocomplete="off">
-            </label>
+            <div class="aequitas-form-grid">
+                <label>
+                    <?= aequitas_h(LOC('aequitas.label.search')) ?>
+                    <input class="aequitas-search" type="search" id="aequitas-filter-search" placeholder="<?= aequitas_h(LOC('aequitas.placeholder.search')) ?>" autocomplete="off">
+                </label>
+                <label>
+                    <?= aequitas_h(LOC('aequitas.label.page_size')) ?>
+                    <select id="aequitas-page-size">
+                        <?php foreach ($aequitasPageSizeOptions as $sizeOption): ?>
+                            <option value="<?= (int) $sizeOption ?>"<?= (int) $sizeOption === $savedPageSize ? ' selected' : '' ?>>
+                                <?= $sizeOption === 0 ? aequitas_h(LOC('aequitas.page_size.unlimited')) : (int) $sizeOption ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            </div>
         </div>
     </section>
 
@@ -341,6 +381,13 @@ if ($cachedAt > 0) {
                     </tbody>
                 </table>
             </div>
+            <div class="aequitas-pager" id="aequitas-pager" hidden>
+                <div class="aequitas-pager-status" id="aequitas-pager-status"></div>
+                <div class="aequitas-pager-controls">
+                    <button type="button" id="aequitas-page-prev"><?= aequitas_h(LOC('aequitas.pager.prev')) ?></button>
+                    <button type="button" id="aequitas-page-next"><?= aequitas_h(LOC('aequitas.pager.next')) ?></button>
+                </div>
+            </div>
         </section>
     <?php endif; ?>
 </div>
@@ -361,13 +408,21 @@ if ($cachedAt > 0) {
     var itemFilter = document.getElementById('aequitas-filter-item');
     var vendorFilter = document.getElementById('aequitas-filter-vendor');
     var searchFilter = document.getElementById('aequitas-filter-search');
+    var pageSizeSelect = document.getElementById('aequitas-page-size');
+    var pagePrev = document.getElementById('aequitas-page-prev');
+    var pageNext = document.getElementById('aequitas-page-next');
+    var pager = document.getElementById('aequitas-pager');
+    var pagerStatus = document.getElementById('aequitas-pager-status');
     var table = document.getElementById('aequitas-table');
     var rowCount = document.getElementById('aequitas-row-count');
     var backdrop = document.getElementById('aequitas-modal-backdrop');
     var modalBody = document.getElementById('aequitas-modal-body');
     var modalClose = document.getElementById('aequitas-modal-close');
+    var pageSize = <?= (int) $savedPageSize ?>;
+    var currentPage = 1;
     var labels = <?= json_encode([
         'row_count' => LOC('aequitas.row_count'),
+        'page_status' => LOC('aequitas.pager.status'),
         'price_list' => LOC('aequitas.col.price_list'),
         'line_no' => LOC('aequitas.col.line_no'),
         'vendor_no' => LOC('aequitas.col.vendor_no'),
@@ -412,41 +467,90 @@ if ($cachedAt > 0) {
         return match[3] + '-' + match[2] + '-' + match[1];
     }
 
-    function applyFilters() {
-        if (!table) {
-            return;
+    function getAllRows() {
+        if (!table || !table.tBodies[0]) {
+            return [];
         }
+        return Array.prototype.slice.call(table.tBodies[0].rows);
+    }
 
+    function rowMatchesFilters(row) {
         var itemValue = (itemFilter && itemFilter.value ? itemFilter.value : '').trim().toLowerCase();
         var vendorValue = (vendorFilter && vendorFilter.value ? vendorFilter.value : '').trim().toLowerCase();
         var searchValue = (searchFilter && searchFilter.value ? searchFilter.value : '').trim().toLowerCase();
-        var rows = table.tBodies[0] ? Array.prototype.slice.call(table.tBodies[0].rows) : [];
-        var visible = 0;
+        var itemNo = (row.getAttribute('data-item') || '').toLowerCase();
+        var vendorNo = (row.getAttribute('data-vendor') || '').toLowerCase();
+        var searchText = (row.getAttribute('data-search') || '').toLowerCase();
+
+        if (itemValue !== '' && itemNo.indexOf(itemValue) === -1) {
+            return false;
+        }
+        if (vendorValue !== '' && vendorNo !== vendorValue) {
+            return false;
+        }
+        if (searchValue !== '' && searchText.indexOf(searchValue) === -1) {
+            return false;
+        }
+        return true;
+    }
+
+    function applyFilters(resetPage) {
+        if (!table) {
+            return;
+        }
+        if (resetPage) {
+            currentPage = 1;
+        }
+
+        var rows = getAllRows();
+        var matching = rows.filter(rowMatchesFilters);
+        var total = matching.length;
+        var size = pageSize > 0 ? pageSize : total;
+        var pageCount = size > 0 ? Math.max(1, Math.ceil(total / size)) : 1;
+        if (currentPage > pageCount) {
+            currentPage = pageCount;
+        }
+        if (currentPage < 1) {
+            currentPage = 1;
+        }
+
+        var start = pageSize > 0 ? (currentPage - 1) * pageSize : 0;
+        var end = pageSize > 0 ? start + pageSize : total;
 
         rows.forEach(function (row) {
-            var itemNo = (row.getAttribute('data-item') || '').toLowerCase();
-            var vendorNo = (row.getAttribute('data-vendor') || '').toLowerCase();
-            var searchText = (row.getAttribute('data-search') || '').toLowerCase();
-            var show = true;
-
-            if (itemValue !== '' && itemNo.indexOf(itemValue) === -1) {
-                show = false;
-            }
-            if (show && vendorValue !== '' && vendorNo !== vendorValue) {
-                show = false;
-            }
-            if (show && searchValue !== '' && searchText.indexOf(searchValue) === -1) {
-                show = false;
-            }
-
-            row.classList.toggle('aequitas-row-hidden', !show);
-            if (show) {
-                visible += 1;
+            row.classList.add('aequitas-row-hidden');
+        });
+        matching.forEach(function (row, index) {
+            if (index >= start && index < end) {
+                row.classList.remove('aequitas-row-hidden');
             }
         });
 
         if (rowCount && labels.row_count) {
-            rowCount.textContent = String(labels.row_count).replace('%d', String(visible));
+            rowCount.textContent = String(labels.row_count).replace('%d', String(total));
+        }
+
+        if (pager) {
+            pager.hidden = total === 0;
+        }
+        if (pagerStatus && labels.page_status) {
+            pagerStatus.textContent = String(labels.page_status)
+                .replace('%1$d', String(currentPage))
+                .replace('%2$d', String(pageCount))
+                .replace('%3$d', String(total));
+        }
+        if (pagePrev) {
+            pagePrev.disabled = currentPage <= 1 || pageSize === 0;
+        }
+        if (pageNext) {
+            pageNext.disabled = currentPage >= pageCount || pageSize === 0 || total === 0;
+        }
+    }
+
+    function savePageSize(size) {
+        var url = 'index.php?action=save_page_size&page_size=' + encodeURIComponent(String(size));
+        if (window.fetch) {
+            fetch(url, { credentials: 'same-origin', cache: 'no-store' }).catch(function () {});
         }
     }
 
@@ -506,9 +610,33 @@ if ($cachedAt > 0) {
         if (!input) {
             return;
         }
-        input.addEventListener('input', applyFilters);
-        input.addEventListener('change', applyFilters);
+        input.addEventListener('input', function () { applyFilters(true); });
+        input.addEventListener('change', function () { applyFilters(true); });
     });
+
+    if (pageSizeSelect) {
+        pageSizeSelect.addEventListener('change', function () {
+            pageSize = parseInt(pageSizeSelect.value, 10);
+            if (isNaN(pageSize)) {
+                pageSize = 100;
+            }
+            savePageSize(pageSize);
+            applyFilters(true);
+        });
+    }
+
+    if (pagePrev) {
+        pagePrev.addEventListener('click', function () {
+            currentPage -= 1;
+            applyFilters(false);
+        });
+    }
+    if (pageNext) {
+        pageNext.addEventListener('click', function () {
+            currentPage += 1;
+            applyFilters(false);
+        });
+    }
 
     if (table) {
         table.addEventListener('click', function (event) {
@@ -547,6 +675,8 @@ if ($cachedAt > 0) {
             closeModal();
         }
     });
+
+    applyFilters(true);
 })();
 </script>
 </body>

@@ -10,7 +10,7 @@ const AEQUITAS_ITEM_BATCH_SIZE = 40;
 /** Tijdelijk uit in nightly: items gaan via hourly.php. */
 const AEQUITAS_FETCH_ITEMS = false;
 /** Max. AppItemCard-regels per hourly-run (tuneerbaar). */
-const AEQUITAS_HOURLY_ITEM_LIMIT = 100;
+const AEQUITAS_HOURLY_ITEM_LIMIT = 200;
 
 const AEQUITAS_COMPANIES = [
     'Koninklijke van Twist',
