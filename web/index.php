@@ -213,10 +213,15 @@ if ($cachedAt > 0) {
         .aequitas-delta-up { color: #b91c1c; }
         .aequitas-delta-down { color: #15803d; }
         .aequitas-delta-eq { color: #94a3b8; font-size: 1.05rem; }
-        .aequitas-pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; }
+        .aequitas-pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+        .aequitas-pager-top { margin: 0 0 14px; }
+        .aequitas-pager-bottom { margin: 14px 0 0; }
         .aequitas-pager-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-        .aequitas-pager button { font: inherit; border: 1px solid var(--kvt-line); background: #fff; border-radius: 10px; padding: 10px 14px; cursor: pointer; color: var(--kvt-text); }
+        .aequitas-page-numbers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .aequitas-pager button { font: inherit; border: 1px solid var(--kvt-line); background: #fff; border-radius: 10px; padding: 10px 14px; cursor: pointer; color: var(--kvt-text); min-width: 44px; }
         .aequitas-pager button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .aequitas-pager button.is-current { background: var(--kvt-text); color: #fff; border-color: var(--kvt-text); cursor: default; }
+        .aequitas-page-ellipsis { color: var(--kvt-muted); padding: 0 2px; user-select: none; }
         .aequitas-pager-status { color: var(--kvt-muted); font-size: 0.92rem; }
         .aequitas-row-mismatch td { background: #ffedd5; }
         .aequitas-row-conflict { cursor: pointer; }
@@ -321,6 +326,14 @@ if ($cachedAt > 0) {
 
     <?php if ($rows !== []): ?>
         <section class="aequitas-card">
+            <div class="aequitas-pager aequitas-pager-top" hidden>
+                <div class="aequitas-pager-status"></div>
+                <div class="aequitas-pager-controls">
+                    <button type="button" class="aequitas-page-prev"><?= aequitas_h(LOC('aequitas.pager.prev')) ?></button>
+                    <div class="aequitas-page-numbers" aria-label="<?= aequitas_h(LOC('aequitas.pager.pages')) ?>"></div>
+                    <button type="button" class="aequitas-page-next"><?= aequitas_h(LOC('aequitas.pager.next')) ?></button>
+                </div>
+            </div>
             <div class="aequitas-table-wrap">
                 <table class="aequitas-table" id="aequitas-table">
                     <thead>
@@ -381,11 +394,12 @@ if ($cachedAt > 0) {
                     </tbody>
                 </table>
             </div>
-            <div class="aequitas-pager" id="aequitas-pager" hidden>
-                <div class="aequitas-pager-status" id="aequitas-pager-status"></div>
+            <div class="aequitas-pager aequitas-pager-bottom" hidden>
+                <div class="aequitas-pager-status"></div>
                 <div class="aequitas-pager-controls">
-                    <button type="button" id="aequitas-page-prev"><?= aequitas_h(LOC('aequitas.pager.prev')) ?></button>
-                    <button type="button" id="aequitas-page-next"><?= aequitas_h(LOC('aequitas.pager.next')) ?></button>
+                    <button type="button" class="aequitas-page-prev"><?= aequitas_h(LOC('aequitas.pager.prev')) ?></button>
+                    <div class="aequitas-page-numbers" aria-label="<?= aequitas_h(LOC('aequitas.pager.pages')) ?>"></div>
+                    <button type="button" class="aequitas-page-next"><?= aequitas_h(LOC('aequitas.pager.next')) ?></button>
                 </div>
             </div>
         </section>
@@ -409,10 +423,7 @@ if ($cachedAt > 0) {
     var vendorFilter = document.getElementById('aequitas-filter-vendor');
     var searchFilter = document.getElementById('aequitas-filter-search');
     var pageSizeSelect = document.getElementById('aequitas-page-size');
-    var pagePrev = document.getElementById('aequitas-page-prev');
-    var pageNext = document.getElementById('aequitas-page-next');
-    var pager = document.getElementById('aequitas-pager');
-    var pagerStatus = document.getElementById('aequitas-pager-status');
+    var pagers = Array.prototype.slice.call(document.querySelectorAll('.aequitas-pager'));
     var table = document.getElementById('aequitas-table');
     var rowCount = document.getElementById('aequitas-row-count');
     var backdrop = document.getElementById('aequitas-modal-backdrop');
@@ -494,6 +505,74 @@ if ($cachedAt > 0) {
         return true;
     }
 
+    function buildPageItems(current, last) {
+        var pages = {};
+        var i;
+        pages[1] = true;
+        pages[last] = true;
+        for (i = current - 3; i <= current + 3; i++) {
+            if (i >= 1 && i <= last) {
+                pages[i] = true;
+            }
+        }
+
+        var sorted = Object.keys(pages).map(Number).sort(function (a, b) { return a - b; });
+        var items = [];
+        for (i = 0; i < sorted.length; i++) {
+            if (i > 0 && sorted[i] - sorted[i - 1] > 1) {
+                items.push('ellipsis');
+            }
+            items.push(sorted[i]);
+        }
+        return items;
+    }
+
+    function renderPagerNumbers(container, current, last) {
+        if (!container) {
+            return;
+        }
+        var html = '';
+        buildPageItems(current, last).forEach(function (item) {
+            if (item === 'ellipsis') {
+                html += '<span class="aequitas-page-ellipsis">…</span>';
+                return;
+            }
+            var isCurrent = item === current;
+            html += '<button type="button" class="aequitas-page-num' + (isCurrent ? ' is-current' : '') + '"'
+                + ' data-page="' + item + '"'
+                + (isCurrent ? ' aria-current="page" disabled' : '')
+                + '>' + item + '</button>';
+        });
+        container.innerHTML = html;
+    }
+
+    function updatePagers(total, pageCount) {
+        var statusText = labels.page_status
+            ? String(labels.page_status)
+                .replace('%1$d', String(currentPage))
+                .replace('%2$d', String(pageCount))
+                .replace('%3$d', String(total))
+            : '';
+
+        pagers.forEach(function (pagerEl) {
+            pagerEl.hidden = total === 0 || pageSize === 0;
+            var status = pagerEl.querySelector('.aequitas-pager-status');
+            var prev = pagerEl.querySelector('.aequitas-page-prev');
+            var next = pagerEl.querySelector('.aequitas-page-next');
+            var numbers = pagerEl.querySelector('.aequitas-page-numbers');
+            if (status) {
+                status.textContent = statusText;
+            }
+            if (prev) {
+                prev.disabled = currentPage <= 1 || pageSize === 0;
+            }
+            if (next) {
+                next.disabled = currentPage >= pageCount || pageSize === 0 || total === 0;
+            }
+            renderPagerNumbers(numbers, currentPage, pageCount);
+        });
+    }
+
     function applyFilters(resetPage) {
         if (!table) {
             return;
@@ -530,21 +609,7 @@ if ($cachedAt > 0) {
             rowCount.textContent = String(labels.row_count).replace('%d', String(total));
         }
 
-        if (pager) {
-            pager.hidden = total === 0;
-        }
-        if (pagerStatus && labels.page_status) {
-            pagerStatus.textContent = String(labels.page_status)
-                .replace('%1$d', String(currentPage))
-                .replace('%2$d', String(pageCount))
-                .replace('%3$d', String(total));
-        }
-        if (pagePrev) {
-            pagePrev.disabled = currentPage <= 1 || pageSize === 0;
-        }
-        if (pageNext) {
-            pageNext.disabled = currentPage >= pageCount || pageSize === 0 || total === 0;
-        }
+        updatePagers(total, pageCount);
     }
 
     function savePageSize(size) {
@@ -625,18 +690,31 @@ if ($cachedAt > 0) {
         });
     }
 
-    if (pagePrev) {
-        pagePrev.addEventListener('click', function () {
-            currentPage -= 1;
-            applyFilters(false);
+    pagers.forEach(function (pagerEl) {
+        pagerEl.addEventListener('click', function (event) {
+            var target = event.target.closest('button');
+            if (!target || target.disabled) {
+                return;
+            }
+            if (target.classList.contains('aequitas-page-prev')) {
+                currentPage -= 1;
+                applyFilters(false);
+                return;
+            }
+            if (target.classList.contains('aequitas-page-next')) {
+                currentPage += 1;
+                applyFilters(false);
+                return;
+            }
+            if (target.classList.contains('aequitas-page-num')) {
+                var page = parseInt(target.getAttribute('data-page') || '0', 10);
+                if (!isNaN(page) && page > 0) {
+                    currentPage = page;
+                    applyFilters(false);
+                }
+            }
         });
-    }
-    if (pageNext) {
-        pageNext.addEventListener('click', function () {
-            currentPage += 1;
-            applyFilters(false);
-        });
-    }
+    });
 
     if (table) {
         table.addEventListener('click', function (event) {
