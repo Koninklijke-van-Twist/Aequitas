@@ -4,7 +4,7 @@ Inkoopprijsvergelijking op basis van `AppItemCard` en `Prijslijstregels` uit Bus
 
 ## Data
 
-`nightly.php` haalt 's nachts via GET beide BC-entities **pagina voor pagina** op (`$top` + `odata.maxpagesize`) en schrijft elke chunk naar JSONL in `web/cache/aequitas/` tot de volgende nightly-run. `index.php` leest alleen die cache.
+`nightly.php` haalt per bedrijf de actuele Prijslijstregels op. `hourly.php` vult AppItemCard bij in stappen (standaard max. 100, tuneerbaar): eerst backfill, daarna gaps voor nieuwe prijslijstartikelen en catchup op `Last_Date_Modified`. Alleen afwijkende bedragen en dubbele regels blijven in de item-cache; welk artikel al gecheckt is staat in `*.items_checked.json`.
 
 ## Starten
 

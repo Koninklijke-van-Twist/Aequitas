@@ -11,7 +11,6 @@ ini_set('memory_limit', '512M');
  */
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/logincheck.php';
-require_once __DIR__ . '/bc_data.php';
 require_once __DIR__ . '/aequitas_data.php';
 
 /**
@@ -20,19 +19,12 @@ require_once __DIR__ . '/aequitas_data.php';
 
 function aequitas_nightly_companies(string $requestedCompany): array
 {
-    $known = bc_companies_for_page(1);
     $requestedCompany = trim($requestedCompany);
-    if ($requestedCompany === '') {
-        return $known;
+    if ($requestedCompany !== '') {
+        return [$requestedCompany];
     }
 
-    foreach ($known as $company) {
-        if (strcasecmp((string) $company, $requestedCompany) === 0) {
-            return [(string) $company];
-        }
-    }
-
-    return [$requestedCompany];
+    return AEQUITAS_COMPANIES;
 }
 
 function aequitas_nightly_send_json(array $payload, int $status = 200): never
@@ -48,9 +40,9 @@ function aequitas_nightly_send_json(array $payload, int $status = 200): never
  * Page load
  */
 
+$startedAt = time();
 $requestedCompany = trim((string) ($_GET['company'] ?? ''));
 $companies = aequitas_nightly_companies($requestedCompany);
-$startedAt = time();
 $results = [];
 $ok = true;
 
@@ -61,16 +53,20 @@ foreach ($companies as $company) {
     }
 
     try {
-        auth_set_current_company_context($companyName, 1);
         $meta = aequitas_refresh_company($companyName);
         $results[] = [
             'ok' => true,
             'company' => $companyName,
             'cached_at' => (int) ($meta['cached_at'] ?? time()),
-            'item_count' => (int) ($meta['item_count'] ?? 0),
+            'items_mode' => (string) ($meta['items_mode'] ?? 'full'),
+            'items_watermark' => (string) ($meta['items_watermark'] ?? ''),
+            'price_line_read' => (int) ($meta['price_line_read'] ?? 0),
             'price_line_count' => (int) ($meta['price_line_count'] ?? 0),
-            'item_pages' => (int) ($meta['item_pages'] ?? 0),
+            'unique_items' => (int) ($meta['unique_items'] ?? 0),
+            'item_read' => (int) ($meta['item_read'] ?? 0),
+            'item_count' => (int) ($meta['item_count'] ?? 0),
             'price_line_pages' => (int) ($meta['price_line_pages'] ?? 0),
+            'item_pages' => (int) ($meta['item_pages'] ?? 0),
         ];
     } catch (Throwable $error) {
         $ok = false;

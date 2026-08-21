@@ -31,7 +31,7 @@ function aequitas_format_number(float $value): string
 
 function aequitas_format_money(float $value): string
 {
-    return number_format($value, 2, ',', '.');
+    return '€ ' . number_format($value, 2, ',', '.');
 }
 
 function aequitas_format_date(string $value): string
@@ -48,6 +48,50 @@ function aequitas_format_date(string $value): string
     return $value;
 }
 
+/**
+ * Δ tussen laatste directe kosten en inkoopprijs (basis = inkoopprijs).
+ *
+ * @return array{dir:string,percent:float,label:string}
+ */
+function aequitas_price_delta(float $lastDirectCost, float $purchasePrice): array
+{
+    $ldcCents = (int) round($lastDirectCost * 100);
+    $ppCents = (int) round($purchasePrice * 100);
+
+    if ($ldcCents === $ppCents) {
+        return ['dir' => 'eq', 'percent' => 0.0, 'label' => '~'];
+    }
+
+    if ($ppCents === 0) {
+        $percent = 100.0;
+    } else {
+        $percent = abs(($lastDirectCost - $purchasePrice) / $purchasePrice) * 100;
+    }
+
+    $label = number_format($percent, 1, ',', '.') . '%';
+    if ($ldcCents > $ppCents) {
+        return ['dir' => 'up', 'percent' => $percent, 'label' => $label];
+    }
+
+    return ['dir' => 'down', 'percent' => $percent, 'label' => $label];
+}
+
+function aequitas_format_delta_html(float $lastDirectCost, float $purchasePrice): string
+{
+    $delta = aequitas_price_delta($lastDirectCost, $purchasePrice);
+    if ($delta['dir'] === 'eq') {
+        return '<span class="aequitas-delta aequitas-delta-eq" title="0%">~</span>';
+    }
+
+    if ($delta['dir'] === 'up') {
+        return '<span class="aequitas-delta aequitas-delta-up" title="'
+            . aequitas_h($delta['label']) . '">↑ ' . aequitas_h($delta['label']) . '</span>';
+    }
+
+    return '<span class="aequitas-delta aequitas-delta-down" title="'
+        . aequitas_h($delta['label']) . '">↓ ' . aequitas_h($delta['label']) . '</span>';
+}
+
 function aequitas_row_search_text(array $row): string
 {
     $parts = [
@@ -55,11 +99,12 @@ function aequitas_row_search_text(array $row): string
         $row['description'] ?? '',
         $row['vendor_no'] ?? '',
         $row['vendor_name'] ?? '',
+        aequitas_format_money((float) ($row['purchase_price'] ?? 0)),
         aequitas_format_money((float) ($row['last_direct_cost'] ?? 0)),
+        aequitas_price_delta((float) ($row['last_direct_cost'] ?? 0), (float) ($row['purchase_price'] ?? 0))['label'],
         aequitas_format_number((float) ($row['minimum_quantity'] ?? 0)),
         $row['base_unit'] ?? '',
         $row['unit'] ?? '',
-        aequitas_format_money((float) ($row['purchase_price'] ?? 0)),
         aequitas_format_date((string) ($row['starting_date'] ?? '')),
         aequitas_format_date((string) ($row['ending_date'] ?? '')),
         aequitas_format_money((float) ($row['settlement_price'] ?? 0)),
@@ -141,6 +186,10 @@ if ($cachedAt > 0) {
         table.aequitas-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
         table.aequitas-table th:first-child, table.aequitas-table td:first-child { position: sticky; left: 0; z-index: 1; min-width: 110px; }
         table.aequitas-table th:first-child { z-index: 3; }
+        .aequitas-delta { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .aequitas-delta-up { color: #b91c1c; }
+        .aequitas-delta-down { color: #15803d; }
+        .aequitas-delta-eq { color: #94a3b8; font-size: 1.05rem; }
         .aequitas-row-mismatch td { background: #ffedd5; }
         .aequitas-row-conflict { cursor: pointer; }
         .aequitas-row-conflict td { background: #fecaca; animation: aequitas-blink 1.1s ease-in-out infinite; }
@@ -239,11 +288,12 @@ if ($cachedAt > 0) {
                             <th><?= aequitas_h(LOC('aequitas.col.item_no')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.description')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.vendor_no')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.purchase_price')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.last_direct_cost')) ?></th>
+                            <th><?= aequitas_h(LOC('aequitas.col.delta')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.minimum_quantity')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.base_unit')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.unit')) ?></th>
-                            <th><?= aequitas_h(LOC('aequitas.col.purchase_price')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.starting_date')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.ending_date')) ?></th>
                             <th><?= aequitas_h(LOC('aequitas.col.settlement_price')) ?></th>
@@ -277,11 +327,12 @@ if ($cachedAt > 0) {
                                 <td><?= aequitas_h((string) $row['item_no']) ?></td>
                                 <td><?= aequitas_h((string) $row['description']) ?></td>
                                 <td><?= aequitas_h((string) $row['vendor_no']) ?></td>
+                                <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['purchase_price'])) ?></td>
                                 <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['last_direct_cost'])) ?></td>
+                                <td class="num"><?= aequitas_format_delta_html((float) $row['last_direct_cost'], (float) $row['purchase_price']) ?></td>
                                 <td class="num"><?= aequitas_h(aequitas_format_number((float) $row['minimum_quantity'])) ?></td>
                                 <td><?= aequitas_h((string) $row['base_unit']) ?></td>
                                 <td><?= aequitas_h((string) $row['unit']) ?></td>
-                                <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['purchase_price'])) ?></td>
                                 <td><?= aequitas_h(aequitas_format_date((string) $row['starting_date'])) ?></td>
                                 <td><?= aequitas_h(aequitas_format_date((string) $row['ending_date'])) ?></td>
                                 <td class="num"><?= aequitas_h(aequitas_format_money((float) $row['settlement_price'])) ?></td>
@@ -341,6 +392,14 @@ if ($cachedAt > 0) {
         return new Intl.NumberFormat('nl-NL', {
             minimumFractionDigits: Math.abs(num - Math.round(num)) < 0.00001 ? 0 : 2,
             maximumFractionDigits: 2
+        }).format(num);
+    }
+
+    function formatMoney(value) {
+        var num = Number(value || 0);
+        return new Intl.NumberFormat('nl-NL', {
+            style: 'currency',
+            currency: 'EUR'
         }).format(num);
     }
 
@@ -431,7 +490,7 @@ if ($cachedAt > 0) {
             html += '<td>' + escapeHtml(line.Description || line.PriceListDescription || '') + '</td>';
             html += '<td class="num">' + escapeHtml(formatNumber(line.Minimum_Quantity)) + '</td>';
             html += '<td>' + escapeHtml(line.Unit_of_Measure_Code || '') + '</td>';
-            html += '<td class="num">' + escapeHtml(formatNumber(line.DirectUnitCost)) + '</td>';
+            html += '<td class="num">' + escapeHtml(formatMoney(line.DirectUnitCost)) + '</td>';
             html += '<td>' + escapeHtml(formatDate(line.Starting_Date)) + '</td>';
             html += '<td>' + escapeHtml(formatDate(line.Ending_Date)) + '</td>';
             html += '</tr>';

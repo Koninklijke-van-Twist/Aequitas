@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## Scope en architectuur
 - Deze applicatie draait volledig vanuit de map `web/`.
-- Houd links relatief (`index.php`, `odata.php?...`, `nightly.php`).
+- Houd links relatief (`index.php`, `odata.php?...`, `nightly.php`, `hourly.php`).
 - De app is mobile-first. Nieuwe UI-wijzigingen moeten eerst op telefoonscherm goed leesbaar zijn.
 
 ## Niet wijzigen
@@ -23,17 +23,22 @@ alwaysApply: true
 - Leidende BC-entities:
   - `AppItemCard` — artikel, leverancier, laatste directe kosten, eenheid basis
   - `Prijslijstregels` — minimumaantal, eenheid, inkoopprijs, begin- en einddatum
-- `nightly.php` haalt beide entities via GET gepagineerd (`$top` + `Prefer: odata.maxpagesize`) op en schrijft elke pagina direct naar JSONL in `web/cache/aequitas/` tot de volgende nightly-run. Verhoog `AEQUITAS_CACHE_VERSION` bij schema-wijzigingen. Gebruik niet `odata_get_all()` voor deze entities.
+- `nightly.php` haalt per bedrijf de actuele Prijslijstregels op (met datumfilter) en bouwt de prijsindex. Items staan standaard uit in nightly (`AEQUITAS_FETCH_ITEMS`).
+- `hourly.php` haalt AppItemCard stapsgewijs op, max. `AEQUITAS_HOURLY_ITEM_LIMIT` (default 100, override via `?limit=`). Ontbreekt de nightly-cache, dan draait hourly eerst/alleen de nightly (prijslijst) in plaats van items.
+  1. Backfill langs de prijsindex tot compleet (checked-set bijhouden).
+  2. Daarna per run: eerst gaps (nieuw op prijslijst, nog niet gecheckt), daarna catchup via `Last_Date_Modified >= watermark`.
+  Ongewijzigde/matching items blijven buiten de mismatch-cache maar wel in de checked-set. Bij falen blijft de bestaande item-cache onaangetast.
+- Voor AppItemCard/Prijslijstregels: pagineren via `odata_get_json()` uit `odata.php` (zelfde client als de rest). Niet `odata_get_all()` — die laadt alles in geheugen en kan OOM geven.
 - `index.php` leest alleen de nightly-cache; geen live BC-calls op de hoofdpagina.
 - Vaste verrekeningsprijs = `1.03 * Last_Direct_Cost`.
-- Toon alleen prijslijstregels waarvan de huidige datum tussen begindatum en einddatum ligt.
+- Toon alleen prijslijstregels waarvan de huidige datum tussen begindatum en einddatum ligt (`Starting_Date <= vandaag`, `Ending_Date >= vandaag` of `0001-01-01` = oneindig). Dit filtert al bij de OData-call.
 - Bij meerdere huidige regels per artikel: toon de nieuwste begindatum en markeer de rij als conflict.
 
 ## UI-regels
 - Geen zware frameworks introduceren zonder expliciet verzoek.
 - Gebruik bestaande favicon/manifest-bestanden op elke HTML-pagina.
 - Gebruik op de hoofdpagina altijd `logo-website.png`.
-- Rijen met gelijke laatste directe kosten en inkoopprijs blijven normaal; afwijkingen oranje; conflicterende dubbele regels knipperen rood.
+- Rijen met gelijke laatste directe kosten en inkoopprijs worden weggelaten; afwijkingen oranje; conflicterende dubbele regels knipperen rood.
 
 ## Veiligheid en kwaliteit
 - Vang OData-fouten af en toon een korte gebruikersvriendelijke melding.
