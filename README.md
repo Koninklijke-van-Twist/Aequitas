@@ -4,7 +4,7 @@ Inkoopprijsvergelijking op basis van `AppItemCard` en `Prijslijstregels` uit Bus
 
 ## Data
 
-`nightly.php` haalt per bedrijf de actuele Prijslijstregels op. `hourly.php` vult AppItemCard bij in stappen (standaard max. 100, tuneerbaar): eerst backfill, daarna gaps voor nieuwe prijslijstartikelen en catchup op `Last_Date_Modified`. Alleen afwijkende bedragen en dubbele regels blijven in de item-cache; welk artikel al gecheckt is staat in `*.items_checked.json`.
+`nightly.php` haalt per bedrijf de actuele Prijslijstregels en AppItemCard (Artikelen) op. Bestaat er al een item-cache met watermark, dan is de Artikelen-sync incrementeel (`Last_Date_Modified` plus gewijzigde prijsregels); anders een volledige sync van de prijsindex. Alleen afwijkende bedragen en dubbele regels blijven in de item-cache. `hourly.php` haalt geen AppItemCard op.
 
 ## Starten
 

@@ -38,6 +38,9 @@ function aequitas_nightly_send_json(array $payload, int $status = 200): never
 
 /**
  * Page load
+ *
+ * Per bedrijf: actuele Prijslijstregels en AppItemCard (Artikelen).
+ * Hourly.php doet deze sync niet.
  */
 
 $startedAt = time();
