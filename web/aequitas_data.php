@@ -195,7 +195,6 @@ function aequitas_slim_item(array $row): array
         'Last_Direct_Cost' => aequitas_scalar_float($row['Last_Direct_Cost'] ?? 0),
         'Base_Unit_of_Measure' => aequitas_scalar_string($row['Base_Unit_of_Measure'] ?? ''),
         'Blocked' => (bool) ($row['Blocked'] ?? false),
-        'Last_Date_Modified' => aequitas_parse_date($row['Last_Date_Modified'] ?? ''),
     ];
 }
 
@@ -404,31 +403,6 @@ function aequitas_read_jsonl(string $path): Generator
     }
 }
 
-function aequitas_count_jsonl_lines(string $path): int
-{
-    if (!is_file($path)) {
-        return 0;
-    }
-
-    $handle = fopen($path, 'r');
-    if ($handle === false) {
-        return 0;
-    }
-
-    $count = 0;
-    try {
-        while (($line = fgets($handle)) !== false) {
-            if (trim($line) !== '') {
-                $count++;
-            }
-        }
-    } finally {
-        fclose($handle);
-    }
-
-    return $count;
-}
-
 function aequitas_is_usable_price_line(array $line, string $today): bool
 {
     if (!aequitas_is_item_asset((string) ($line['Asset_Type'] ?? ''))) {
@@ -621,20 +595,6 @@ function aequitas_load_price_index(string $path): array
     return is_array($index) ? $index : [];
 }
 
-function aequitas_load_items_map(string $path): array
-{
-    $map = [];
-    foreach (aequitas_read_jsonl($path) as $item) {
-        $itemNo = aequitas_scalar_string($item['No'] ?? '');
-        if ($itemNo === '') {
-            continue;
-        }
-        $map[$itemNo] = $item;
-    }
-
-    return $map;
-}
-
 function aequitas_write_items_map(string $path, array $map): int
 {
     $handle = fopen($path, 'wb');
@@ -674,54 +634,6 @@ function aequitas_apply_item_to_map(array &$map, array $item, array $priceIndex)
     }
 
     $map[$itemNo] = $item;
-}
-
-function aequitas_prune_items_map(array $map, array $priceIndex): array
-{
-    foreach ($map as $itemNo => $item) {
-        if (!is_array($item)) {
-            unset($map[$itemNo]);
-            continue;
-        }
-
-        $priceInfo = $priceIndex[$itemNo] ?? null;
-        if (!is_array($priceInfo) || !empty($item['Blocked']) || !aequitas_item_should_keep($item, $priceInfo)) {
-            unset($map[$itemNo]);
-        }
-    }
-
-    return $map;
-}
-
-function aequitas_price_index_changed_nos(array $oldIndex, array $newIndex): array
-{
-    $changed = [];
-    foreach ($newIndex as $itemNo => $info) {
-        if (!is_array($info)) {
-            continue;
-        }
-
-        $itemNo = aequitas_scalar_string($itemNo);
-        if ($itemNo === '') {
-            continue;
-        }
-
-        $old = $oldIndex[$itemNo] ?? null;
-        if (!is_array($old)) {
-            $changed[] = $itemNo;
-            continue;
-        }
-
-        $oldPrice = aequitas_scalar_float($old['purchase_price'] ?? 0);
-        $newPrice = aequitas_scalar_float($info['purchase_price'] ?? 0);
-        $oldConflict = !empty($old['conflict']);
-        $newConflict = !empty($info['conflict']);
-        if (!aequitas_prices_equal($oldPrice, $newPrice) || $oldConflict !== $newConflict) {
-            $changed[] = $itemNo;
-        }
-    }
-
-    return $changed;
 }
 
 function aequitas_fetch_items_for_numbers_into_map(string $company, array $itemNos, array $priceIndex, array &$map): array
@@ -767,98 +679,23 @@ function aequitas_fetch_items_for_numbers_into_map(string $company, array $itemN
     ];
 }
 
-function aequitas_fetch_items_modified_since_into_map(
-    string $company,
-    string $sinceDate,
-    array $priceIndex,
-    array &$map
-): array {
-    $sinceDate = aequitas_parse_date($sinceDate);
-    if ($sinceDate === '') {
-        return ['read' => 0, 'pages' => 0];
-    }
-
-    return aequitas_paginate_entity(
-        $company,
-        AEQUITAS_ITEMS_ENTITY,
-        [
-            '$select' => AEQUITAS_ITEMS_SELECT,
-            '$filter' => "Last_Date_Modified ge " . $sinceDate,
-            '$orderby' => 'Last_Date_Modified,No',
-        ],
-        static function (array $row) use (&$map, $priceIndex): bool {
-            $item = aequitas_slim_item($row);
-            $itemNo = $item['No'];
-            if ($itemNo === '' || !isset($priceIndex[$itemNo])) {
-                return false;
-            }
-
-            aequitas_apply_item_to_map($map, $item, $priceIndex);
-            return true;
-        }
-    );
-}
-
 /**
- * Nightly AppItemCard-sync voor artikelen op de prijsindex.
- * Incrementeel alleen als de backfill af is, anders een volledige sync.
- * items_backfill_done wordt alleen true na een geslaagde volledige itempopulatie.
+ * Nightly: volledige AppItemCard-sync voor artikelen op de prijsindex.
  */
 function aequitas_sync_company_items(
     string $company,
     array $priceIndex,
     array $itemNos,
-    string $targetPath,
-    string $existingItemsPath,
-    string $existingIndexPath,
-    ?string $watermark,
-    bool $backfillDone
+    string $targetPath
 ): array {
     $map = [];
-    $mode = 'full';
-    $read = 0;
-    $pages = 0;
-    $today = (new DateTimeImmutable('today'))->format('Y-m-d');
-    $watermark = aequitas_parse_date((string) $watermark);
-
-    $canIncremental = $backfillDone
-        && $watermark !== ''
-        && is_file($existingItemsPath)
-        && aequitas_count_jsonl_lines($existingItemsPath) > 0;
-
-    if ($canIncremental) {
-        $mode = 'incremental';
-        $map = aequitas_prune_items_map(aequitas_load_items_map($existingItemsPath), $priceIndex);
-
-        $modifiedStats = aequitas_fetch_items_modified_since_into_map($company, $watermark, $priceIndex, $map);
-        $read += (int) ($modifiedStats['read'] ?? 0);
-        $pages += (int) ($modifiedStats['pages'] ?? 0);
-
-        $oldIndex = aequitas_load_price_index($existingIndexPath);
-        $changedNos = aequitas_price_index_changed_nos($oldIndex, $priceIndex);
-        if ($changedNos !== []) {
-            $changedStats = aequitas_fetch_items_for_numbers_into_map($company, $changedNos, $priceIndex, $map);
-            $read += (int) ($changedStats['read'] ?? 0);
-            $pages += (int) ($changedStats['pages'] ?? 0);
-        }
-    } else {
-        $fullStats = aequitas_fetch_items_for_numbers_into_map($company, $itemNos, $priceIndex, $map);
-        $read += (int) ($fullStats['read'] ?? 0);
-        $pages += (int) ($fullStats['pages'] ?? 0);
-    }
-
+    $stats = aequitas_fetch_items_for_numbers_into_map($company, $itemNos, $priceIndex, $map);
     $kept = aequitas_write_items_map($targetPath, $map);
-    if ($mode === 'full') {
-        $backfillDone = true;
-    }
 
     return [
-        'mode' => $mode,
         'kept' => $kept,
-        'read' => $read,
-        'pages' => $pages,
-        'items_watermark' => $today,
-        'items_backfill_done' => $backfillDone,
+        'read' => (int) ($stats['read'] ?? 0),
+        'pages' => (int) ($stats['pages'] ?? 0),
     ];
 }
 
@@ -868,49 +705,18 @@ function aequitas_refresh_company(string $company): array
     $tmpPrices = $files['prices'] . '.tmp';
     $tmpItems = $files['items'] . '.tmp';
     $tmpIndex = $files['price_index'] . '.tmp';
-    $previousMeta = aequitas_read_company_meta($company);
-    $watermark = aequitas_scalar_string(is_array($previousMeta) ? ($previousMeta['items_watermark'] ?? '') : '');
-    $backfillDone = is_array($previousMeta) && !empty($previousMeta['items_backfill_done']);
     $tmpMeta = $files['meta'] . '.tmp';
 
     try {
         $priceStats = aequitas_write_prices_file($company, $tmpPrices);
         $itemNos = aequitas_build_price_index_from_file($tmpPrices, $tmpIndex);
         $priceIndex = aequitas_load_price_index($tmpIndex);
-
-        if (AEQUITAS_FETCH_ITEMS) {
-            $itemStats = aequitas_sync_company_items(
-                $company,
-                $priceIndex,
-                $itemNos,
-                $tmpItems,
-                $files['items'],
-                $files['price_index'],
-                $watermark !== '' ? $watermark : null,
-                $backfillDone
-            );
-        } else {
-            @unlink($tmpItems);
-            if (!is_file($files['items'])) {
-                file_put_contents($files['items'], '');
-            }
-            $itemStats = [
-                'mode' => 'skipped',
-                'kept' => aequitas_count_jsonl_lines($files['items']),
-                'read' => 0,
-                'pages' => 0,
-                'items_watermark' => $watermark,
-                'items_backfill_done' => $backfillDone,
-            ];
-        }
+        $itemStats = aequitas_sync_company_items($company, $priceIndex, $itemNos, $tmpItems);
 
         $meta = [
             'version' => AEQUITAS_CACHE_VERSION,
             'company' => $company,
             'cached_at' => time(),
-            'items_watermark' => (string) ($itemStats['items_watermark'] ?? $watermark),
-            'items_mode' => (string) ($itemStats['mode'] ?? 'full'),
-            'items_backfill_done' => !empty($itemStats['items_backfill_done']),
             'item_count' => (int) ($itemStats['kept'] ?? 0),
             'price_line_count' => (int) ($priceStats['kept'] ?? 0),
             'price_line_read' => (int) ($priceStats['read'] ?? 0),
@@ -927,15 +733,12 @@ function aequitas_refresh_company(string $company): array
             throw new RuntimeException('Cache-meta schrijven mislukt');
         }
 
-        $pairs = [
+        aequitas_commit_cache_files([
             [$tmpPrices, $files['prices']],
             [$tmpIndex, $files['price_index']],
-        ];
-        if (AEQUITAS_FETCH_ITEMS) {
-            $pairs[] = [$tmpItems, $files['items']];
-        }
-        $pairs[] = [$tmpMeta, $files['meta']];
-        aequitas_commit_cache_files($pairs);
+            [$tmpItems, $files['items']],
+            [$tmpMeta, $files['meta']],
+        ]);
 
         return $meta;
     } catch (Throwable $error) {

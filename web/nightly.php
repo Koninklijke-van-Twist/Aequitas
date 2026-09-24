@@ -39,8 +39,8 @@ function aequitas_nightly_send_json(array $payload, int $status = 200): never
 /**
  * Page load
  *
- * Per bedrijf: actuele Prijslijstregels en AppItemCard (Artikelen).
- * Hourly.php doet deze sync niet.
+ * Per bedrijf een volledige refresh van Prijslijstregels en AppItemCard.
+ * De pagina leest daarna alleen de cache. Hourly.php doet deze sync niet.
  */
 
 $startedAt = time();
@@ -61,8 +61,6 @@ foreach ($companies as $company) {
             'ok' => true,
             'company' => $companyName,
             'cached_at' => (int) ($meta['cached_at'] ?? time()),
-            'items_mode' => (string) ($meta['items_mode'] ?? 'full'),
-            'items_watermark' => (string) ($meta['items_watermark'] ?? ''),
             'price_line_read' => (int) ($meta['price_line_read'] ?? 0),
             'price_line_count' => (int) ($meta['price_line_count'] ?? 0),
             'unique_items' => (int) ($meta['unique_items'] ?? 0),
