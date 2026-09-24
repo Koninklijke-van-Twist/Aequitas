@@ -293,16 +293,74 @@ function aequitas_write_jsonl_row($handle, array $row): void
 
 function aequitas_replace_cache_file(string $tmpPath, string $finalPath): void
 {
-    if (!is_file($tmpPath)) {
-        throw new RuntimeException('Tijdelijk cachebestand ontbreekt: ' . $tmpPath);
-    }
+    aequitas_commit_cache_files([[$tmpPath, $finalPath]]);
+}
 
-    if (is_file($finalPath) && !@unlink($finalPath) && is_file($finalPath)) {
-        throw new RuntimeException('Oud cachebestand kon niet worden vervangen: ' . $finalPath);
-    }
+/**
+ * Vervang cachebestanden pas als elk tijdelijk bestand klaarstaat.
+ * Mislukt een stap, dan gaat elke al geplaatste file terug naar de vorige versie.
+ *
+ * @param array<int, array{0: string, 1: string}> $pairs
+ */
+function aequitas_commit_cache_files(array $pairs): void
+{
+    $done = [];
+    $pendingFinal = null;
+    $pendingBackup = null;
 
-    if (!@rename($tmpPath, $finalPath)) {
-        throw new RuntimeException('Cachebestand kon niet worden geplaatst: ' . $finalPath);
+    try {
+        foreach ($pairs as $pair) {
+            $tmpPath = $pair[0];
+            $finalPath = $pair[1];
+            if (!is_file($tmpPath)) {
+                throw new RuntimeException('Tijdelijk cachebestand ontbreekt: ' . $tmpPath);
+            }
+
+            $backup = $finalPath . '.bak';
+            $pendingFinal = null;
+            $pendingBackup = null;
+            if (is_file($finalPath)) {
+                if (is_file($backup) && !@unlink($backup) && is_file($backup)) {
+                    throw new RuntimeException('Oude cache-backup kon niet worden vervangen: ' . $backup);
+                }
+                if (!@rename($finalPath, $backup)) {
+                    throw new RuntimeException('Oud cachebestand kon niet worden veiliggesteld: ' . $finalPath);
+                }
+                $pendingFinal = $finalPath;
+                $pendingBackup = $backup;
+            }
+
+            if (!@rename($tmpPath, $finalPath)) {
+                throw new RuntimeException('Cachebestand kon niet worden geplaatst: ' . $finalPath);
+            }
+
+            $done[] = [$finalPath, $pendingBackup];
+            $pendingFinal = null;
+            $pendingBackup = null;
+        }
+
+        foreach ($done as $entry) {
+            $backup = $entry[1];
+            if (is_string($backup) && is_file($backup)) {
+                @unlink($backup);
+            }
+        }
+    } catch (Throwable $error) {
+        if ($pendingFinal !== null && $pendingBackup !== null && !is_file($pendingFinal) && is_file($pendingBackup)) {
+            @rename($pendingBackup, $pendingFinal);
+        }
+
+        for ($index = count($done) - 1; $index >= 0; $index--) {
+            [$finalPath, $backup] = $done[$index];
+            if (is_file($finalPath)) {
+                @unlink($finalPath);
+            }
+            if (is_string($backup) && is_file($backup)) {
+                @rename($backup, $finalPath);
+            }
+        }
+
+        throw $error;
     }
 }
 
@@ -743,7 +801,8 @@ function aequitas_fetch_items_modified_since_into_map(
 
 /**
  * Nightly AppItemCard-sync voor artikelen op de prijsindex.
- * Volledig via No-batches, of incrementeel op Last_Date_Modified plus gewijzigde prijsregels.
+ * Incrementeel alleen als de backfill af is, anders een volledige sync.
+ * items_backfill_done wordt alleen true na een geslaagde volledige itempopulatie.
  */
 function aequitas_sync_company_items(
     string $company,
@@ -752,7 +811,8 @@ function aequitas_sync_company_items(
     string $targetPath,
     string $existingItemsPath,
     string $existingIndexPath,
-    ?string $watermark
+    ?string $watermark,
+    bool $backfillDone
 ): array {
     $map = [];
     $mode = 'full';
@@ -761,7 +821,8 @@ function aequitas_sync_company_items(
     $today = (new DateTimeImmutable('today'))->format('Y-m-d');
     $watermark = aequitas_parse_date((string) $watermark);
 
-    $canIncremental = $watermark !== ''
+    $canIncremental = $backfillDone
+        && $watermark !== ''
         && is_file($existingItemsPath)
         && aequitas_count_jsonl_lines($existingItemsPath) > 0;
 
@@ -787,6 +848,9 @@ function aequitas_sync_company_items(
     }
 
     $kept = aequitas_write_items_map($targetPath, $map);
+    if ($mode === 'full') {
+        $backfillDone = true;
+    }
 
     return [
         'mode' => $mode,
@@ -794,6 +858,7 @@ function aequitas_sync_company_items(
         'read' => $read,
         'pages' => $pages,
         'items_watermark' => $today,
+        'items_backfill_done' => $backfillDone,
     ];
 }
 
@@ -804,7 +869,9 @@ function aequitas_refresh_company(string $company): array
     $tmpItems = $files['items'] . '.tmp';
     $tmpIndex = $files['price_index'] . '.tmp';
     $previousMeta = aequitas_read_company_meta($company);
-    $watermark = aequitas_scalar_string($previousMeta['items_watermark'] ?? '');
+    $watermark = aequitas_scalar_string(is_array($previousMeta) ? ($previousMeta['items_watermark'] ?? '') : '');
+    $backfillDone = is_array($previousMeta) && !empty($previousMeta['items_backfill_done']);
+    $tmpMeta = $files['meta'] . '.tmp';
 
     try {
         $priceStats = aequitas_write_prices_file($company, $tmpPrices);
@@ -819,9 +886,9 @@ function aequitas_refresh_company(string $company): array
                 $tmpItems,
                 $files['items'],
                 $files['price_index'],
-                $watermark !== '' ? $watermark : null
+                $watermark !== '' ? $watermark : null,
+                $backfillDone
             );
-            aequitas_replace_cache_file($tmpItems, $files['items']);
         } else {
             @unlink($tmpItems);
             if (!is_file($files['items'])) {
@@ -833,11 +900,9 @@ function aequitas_refresh_company(string $company): array
                 'read' => 0,
                 'pages' => 0,
                 'items_watermark' => $watermark,
+                'items_backfill_done' => $backfillDone,
             ];
         }
-
-        aequitas_replace_cache_file($tmpPrices, $files['prices']);
-        aequitas_replace_cache_file($tmpIndex, $files['price_index']);
 
         $meta = [
             'version' => AEQUITAS_CACHE_VERSION,
@@ -845,6 +910,7 @@ function aequitas_refresh_company(string $company): array
             'cached_at' => time(),
             'items_watermark' => (string) ($itemStats['items_watermark'] ?? $watermark),
             'items_mode' => (string) ($itemStats['mode'] ?? 'full'),
+            'items_backfill_done' => !empty($itemStats['items_backfill_done']),
             'item_count' => (int) ($itemStats['kept'] ?? 0),
             'price_line_count' => (int) ($priceStats['kept'] ?? 0),
             'price_line_read' => (int) ($priceStats['read'] ?? 0),
@@ -853,13 +919,30 @@ function aequitas_refresh_company(string $company): array
             'price_line_pages' => (int) ($priceStats['pages'] ?? 0),
             'unique_items' => count($itemNos),
         ];
-        aequitas_write_meta_file($files['meta'], $meta);
+        $metaJson = json_encode($meta, JSON_UNESCAPED_UNICODE);
+        if ($metaJson === false) {
+            throw new RuntimeException('Cache-meta encoderen mislukt');
+        }
+        if (file_put_contents($tmpMeta, $metaJson, LOCK_EX) === false) {
+            throw new RuntimeException('Cache-meta schrijven mislukt');
+        }
+
+        $pairs = [
+            [$tmpPrices, $files['prices']],
+            [$tmpIndex, $files['price_index']],
+        ];
+        if (AEQUITAS_FETCH_ITEMS) {
+            $pairs[] = [$tmpItems, $files['items']];
+        }
+        $pairs[] = [$tmpMeta, $files['meta']];
+        aequitas_commit_cache_files($pairs);
 
         return $meta;
     } catch (Throwable $error) {
         @unlink($tmpPrices);
         @unlink($tmpItems);
         @unlink($tmpIndex);
+        @unlink($tmpMeta);
         throw $error;
     }
 }
