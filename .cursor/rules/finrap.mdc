@@ -23,11 +23,8 @@ alwaysApply: true
 - Leidende BC-entities:
   - `AppItemCard` — artikel, leverancier, laatste directe kosten, eenheid basis
   - `Prijslijstregels` — minimumaantal, eenheid, inkoopprijs, begin- en einddatum
-- `nightly.php` haalt per bedrijf de actuele Prijslijstregels op (met datumfilter) en bouwt de prijsindex. Items staan standaard uit in nightly (`AEQUITAS_FETCH_ITEMS`).
-- `hourly.php` haalt AppItemCard stapsgewijs op, max. `AEQUITAS_HOURLY_ITEM_LIMIT` (default 100, override via `?limit=`). Ontbreekt de nightly-cache, dan draait hourly eerst/alleen de nightly (prijslijst) in plaats van items.
-  1. Backfill langs de prijsindex tot compleet (checked-set bijhouden).
-  2. Daarna per run: eerst gaps (nieuw op prijslijst, nog niet gecheckt), daarna catchup via `Last_Date_Modified >= watermark`.
-  Ongewijzigde/matching items blijven buiten de mismatch-cache maar wel in de checked-set. Bij falen blijft de bestaande item-cache onaangetast.
+- `nightly.php` haalt per bedrijf de actuele Prijslijstregels op (met datumfilter), bouwt de prijsindex, en synct AppItemCard volledig. Geen watermark- of backfill-increment. Ongewijzigde/matching items blijven buiten de mismatch-cache. Bij falen blijft de bestaande cache van dat bedrijf onaangetast.
+- `hourly.php` haalt geen AppItemCard / Artikelen op.
 - Voor AppItemCard/Prijslijstregels: pagineren via `odata_get_json()` uit `odata.php` (zelfde client als de rest). Niet `odata_get_all()` — die laadt alles in geheugen en kan OOM geven.
 - `index.php` leest alleen de nightly-cache; geen live BC-calls op de hoofdpagina.
 - Vaste verrekeningsprijs = `1.03 * Last_Direct_Cost`.
