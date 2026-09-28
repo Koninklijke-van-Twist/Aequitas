@@ -51,6 +51,23 @@ function auth_mimir_enabled(): bool
 }
 
 /**
+ * Mímir-discovery alleen zolang dit proces Mímir nog niet heeft laten vallen.
+ * Na een fout en mét BC-credentials geldt het pre-Mímir discovery-pad.
+ */
+function auth_mimir_discovery_active(): bool
+{
+    if (!auth_mimir_enabled()) {
+        return false;
+    }
+    if (function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open()) {
+        if (function_exists('odata_bc_credentials_configured') && odata_bc_credentials_configured()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * Geeft de actieve environments terug op basis van config.
  */
 function auth_get_active_environments(): array
@@ -78,7 +95,7 @@ function auth_get_active_environments(): array
         return $configured;
     }
 
-    // Geen lokale BC-config: bij Mímir environments afleiden uit companies.php.
+    // Geen lokale BC-config: environments uit Mímir, of uit de directe BC-fallback als Mímir faalt.
     if (auth_mimir_enabled()) {
         $cached = $GLOBALS['demeter_active_environments'] ?? null;
         if (is_array($cached) && $cached !== []) {
@@ -288,7 +305,9 @@ function auth_fetch_companies_for_environment_via_curl(string $url, array $auth)
 }
 
 /**
- * Company-discovery via Mímir companies.php (geen BC auth_list/baseUrl).
+ * Company-discovery via Mímir companies.php.
+ * Faalt Mímir, dan levert odata_mimir_companies_as_rows de pre-Mímir BC-companylijst
+ * (mits $baseUrl / $auth_list / $environment in auth.php blijven staan).
  */
 function auth_discover_companies_via_mimir(): array
 {
@@ -404,8 +423,8 @@ function auth_discover_companies_via_mimir(): array
  */
 function auth_discover_companies_across_active_environments(int $ttlSeconds = 300): array
 {
-    // Mímir: companies + environments uit Mímir API — geen $auth_list/$baseUrl nodig.
-    if (auth_mimir_enabled()) {
+    // Mímir eerst. Na een Mímir-fout in dit proces, en mét BC-credentials, het oude pad.
+    if (auth_mimir_discovery_active()) {
         return auth_discover_companies_via_mimir();
     }
 

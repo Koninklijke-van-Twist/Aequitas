@@ -34,7 +34,7 @@ function bc_fetch_rows(string $company, string $entitySet, array $query, int $tt
 
     $environment = auth_get_environment_for_company($company, $ttl);
     $auth = auth_get_auth_for_environment($environment);
-    // Lege $baseUrl is geldig in Mímir-modus; odata_get_all vertaalt het pad.
+    // Lege $baseUrl is geldig in Mímir-modus; bij een Mímir-fout herschrijft odata de URL met $baseUrl.
     $odataBaseUrl = trim((string) ($baseUrl ?? ''));
     $url = bc_company_entity_url($odataBaseUrl, $environment, $company, $entitySet, $query);
 
