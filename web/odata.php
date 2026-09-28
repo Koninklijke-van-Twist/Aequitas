@@ -169,7 +169,8 @@ function odata_bc_auth_php_path(): string
 /**
  * Laadt auth.php in een closure en kopieert BC-variabelen naar $GLOBALS.
  * Een require in de aanroepende functie zou ze anders alleen lokaal maken.
- * Waarden die al gezet zijn worden niet overschreven.
+ * Een bestaande niet-null waarde wordt niet overschreven, ook geen lege string.
+ * Null uit `global $var` (de variabele bestond nog niet) telt als niet gezet.
  */
 function odata_bc_ensure_config_loaded(): void
 {
@@ -194,7 +195,7 @@ function odata_bc_ensure_config_loaded(): void
     })($path);
     $GLOBALS['AEQUITAS_BC_AUTH_LOAD_TRIED'] = true;
     foreach ($loaded as $name => $value) {
-        if ($value === null || array_key_exists($name, $GLOBALS)) {
+        if ($value === null || isset($GLOBALS[$name])) {
             continue;
         }
         $GLOBALS[$name] = $value;

@@ -413,10 +413,49 @@ if (($GLOBALS['baseUrl'] ?? '') !== 'https://keep.example:7148/' || ($GLOBALS['e
     fail('een tweede ensure mag de gekopieerde config niet wissen');
 }
 @unlink($authFile);
+
+$authFileNull = sys_get_temp_dir() . '/aequitas-auth-null-globals.php';
+file_put_contents(
+    $authFileNull,
+    "<?php\n"
+    . "\$baseUrl = 'https://bc-from-file.example:7148/';\n"
+    . "\$environment = 'Sandbox';\n"
+    . "\$auth = ['mode' => 'basic', 'user' => 'file-user', 'pass' => 'file-secret'];\n"
+    . "\$auth_list = ['Sandbox' => \$auth];\n"
+    . "\$mimirApi = 'mimir_from_file_should_not_leak';\n"
+    . "\$mimirBase = 'https://should-not-replace.example';\n"
+);
+unset($GLOBALS['mimirApi'], $GLOBALS['auth'], $GLOBALS['auth_list'], $GLOBALS['environment'], $GLOBALS['AEQUITAS_BC_AUTH_LOAD_TRIED']);
+unset($mimirApi, $auth, $auth_list, $environment);
+(static function (): void {
+    global $mimirApi, $auth, $auth_list;
+})();
+if (!array_key_exists('mimirApi', $GLOBALS) || $GLOBALS['mimirApi'] !== null || $GLOBALS['auth'] !== null || $GLOBALS['auth_list'] !== null) {
+    fail('global op een ontbrekende variabele moet een null-entry in $GLOBALS maken');
+}
+$GLOBALS['baseUrl'] = 'https://keep.example:7148/';
+$GLOBALS['mimirBase'] = '';
+$GLOBALS['AEQUITAS_AUTH_PHP_PATH'] = $authFileNull;
+odata_bc_ensure_config_loaded();
+if (($GLOBALS['mimirApi'] ?? '') !== 'mimir_from_file_should_not_leak') {
+    fail('een null-global mimirApi moet alsnog uit auth.php komen');
+}
+$nullAuth = $GLOBALS['auth'] ?? null;
+$nullList = $GLOBALS['auth_list'] ?? null;
+if (!is_array($nullAuth) || ($nullAuth['user'] ?? '') !== 'file-user' || !is_array($nullList) || ($nullList['Sandbox']['user'] ?? '') !== 'file-user') {
+    fail('null-globals auth en auth_list moeten uit auth.php komen');
+}
+if (($GLOBALS['baseUrl'] ?? '') !== 'https://keep.example:7148/' || ($GLOBALS['mimirBase'] ?? null) !== '') {
+    fail('null-global reparatie mag gezette baseUrl of lege mimirBase niet overschrijven');
+}
+if (odata_mimir_api_key() !== 'mimir_from_file_should_not_leak') {
+    fail('gekopieerde mimirApi is niet zichtbaar via odata_mimir_api_key');
+}
+@unlink($authFileNull);
 unset($GLOBALS['AEQUITAS_AUTH_PHP_PATH']);
 
 $log = fallback_log();
-if (strpos($log, 'sandbox-secret') !== false || strpos($log, 'file-secret') !== false || strpos($log, 'bc-secret') !== false || strpos($log, 'mimir_test_key_should_not_leak') !== false) {
+if (strpos($log, 'sandbox-secret') !== false || strpos($log, 'file-secret') !== false || strpos($log, 'bc-secret') !== false || strpos($log, 'mimir_test_key_should_not_leak') !== false || strpos($log, 'mimir_from_file_should_not_leak') !== false) {
     fail('log bevat een geheim');
 }
 
