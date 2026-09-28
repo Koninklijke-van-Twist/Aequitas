@@ -581,11 +581,21 @@ function auth_get_auth_for_company(string $company, int $ttlSeconds = 300): arra
  */
 function auth_set_current_company_context(?string $company, int $ttlSeconds = 300): array
 {
-    global $environment, $auth;
+    global $environment, $auth, $auth_list;
+
+    static $primaryAuthReady = false;
+    static $primaryAuth = null;
+    static $primaryEnvironment = '';
 
     $companyName = trim((string) $company);
 
     if (auth_mimir_enabled()) {
+        if (!$primaryAuthReady && function_exists('odata_auth_is_usable') && odata_auth_is_usable($auth ?? null)) {
+            $primaryAuthReady = true;
+            $primaryAuth = $auth;
+            $primaryEnvironment = isset($environment) ? trim((string) $environment) : '';
+        }
+
         $targetEnvironment = '';
         if ($companyName !== '') {
             try {
@@ -597,10 +607,9 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
             $targetEnvironment = auth_get_primary_environment();
         }
 
-        // BC-auth alleen als lokaal geconfigureerd; anders lege sentinel.
+        // BC-auth uit $auth_list als die er is. Zonder entry blijft de teruggegeven auth leeg.
         $targetAuth = [];
         if ($targetEnvironment !== '') {
-            global $auth_list;
             $list = is_array($auth_list ?? null) ? $auth_list : [];
             if (isset($list[$targetEnvironment]) && is_array($list[$targetEnvironment])) {
                 $targetAuth = $list[$targetEnvironment];
@@ -608,7 +617,19 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
         }
 
         $environment = $targetEnvironment;
-        $auth = $targetAuth;
+        if ($targetAuth !== []) {
+            $auth = $targetAuth;
+        } else {
+            $list = is_array($auth_list ?? null) ? $auth_list : [];
+            $listEmpty = $list === [];
+            $samePrimary = $primaryEnvironment !== '' && strcasecmp($targetEnvironment, $primaryEnvironment) === 0;
+            // Originele $auth bewaren voor de BC-fallback. Een ander environment met gevulde lijst niet.
+            if (($listEmpty || $samePrimary) && is_array($primaryAuth)) {
+                $auth = $primaryAuth;
+            } else {
+                $auth = [];
+            }
+        }
 
         return [
             'environment' => $targetEnvironment,

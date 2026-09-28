@@ -454,8 +454,77 @@ if (odata_mimir_api_key() !== 'mimir_from_file_should_not_leak') {
 @unlink($authFileNull);
 unset($GLOBALS['AEQUITAS_AUTH_PHP_PATH']);
 
+require_once dirname(__DIR__) . '/web/aequitas_data.php';
+
+odata_mimir_circuit_reset();
+unset(
+    $GLOBALS['demeter_company_environment_map'],
+    $GLOBALS['demeter_companies_by_environment'],
+    $GLOBALS['demeter_active_environments']
+);
+$mimirApi = 'mimir_test_key_should_not_leak';
+$mimirBase = 'http://127.0.0.1:9';
+$baseUrl = 'https://bc.example:7148/';
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+unset($auth_list);
+$beforePage = count($calls);
+try {
+    $pageStats = aequitas_paginate_entity('KVT Gas', 'Prijslijstregels', ['$select' => 'No'], static function (): bool {
+        return true;
+    });
+} catch (Throwable $pageError) {
+    fail('nightly-paginatie met alleen $auth moet op BC terugvallen: ' . $pageError->getMessage());
+}
+if (($pageStats['read'] ?? 0) < 1) {
+    fail('nightly-paginatie met alleen $auth las geen rij: ' . json_encode($pageStats));
+}
+$pageCall = null;
+for ($i = $beforePage; $i < count($calls); $i++) {
+    if (strpos((string) ($calls[$i]['url'] ?? ''), '/Prijslijstregels?') !== false) {
+        $pageCall = $calls[$i];
+    }
+}
+if (!is_array($pageCall) || $pageCall['user'] !== 'bcuser' || strpos((string) $pageCall['url'], 'https://bc.example:7148/Production/ODataV4/Company(') !== 0) {
+    fail('pagina-fallback gebruikte niet de oorspronkelijke $auth: ' . json_encode($pageCall));
+}
+if (auth_get_auth_for_environment('Production') !== []) {
+    fail('auth_get_auth_for_environment moet in Mímir-modus zonder $auth_list de lege sentinel houden');
+}
+
+odata_mimir_circuit_reset();
+unset(
+    $GLOBALS['demeter_company_environment_map'],
+    $GLOBALS['demeter_companies_by_environment'],
+    $GLOBALS['demeter_active_environments']
+);
+$GLOBALS['demeter_company_environment_map'] = ['KVT Gas' => 'Production'];
+$environment = 'Production';
+$auth = ['mode' => 'basic', 'user' => 'bcuser', 'pass' => 'bc-secret'];
+$auth_list = ['Sandbox' => ['mode' => 'basic', 'user' => 'sand', 'pass' => 'sand-secret']];
+$beforePrimary = count($calls);
+try {
+    $primaryStats = aequitas_paginate_entity('KVT Gas', 'Prijslijstregels', ['$select' => 'No'], static function (): bool {
+        return true;
+    });
+} catch (Throwable $primaryError) {
+    fail('primair environment zonder auth_list-entry moet $auth gebruiken: ' . $primaryError->getMessage());
+}
+if (($primaryStats['read'] ?? 0) < 1) {
+    fail('primair environment las geen rij: ' . json_encode($primaryStats));
+}
+$primaryCall = null;
+for ($i = $beforePrimary; $i < count($calls); $i++) {
+    if (strpos((string) ($calls[$i]['url'] ?? ''), '/Prijslijstregels?') !== false) {
+        $primaryCall = $calls[$i];
+    }
+}
+if (!is_array($primaryCall) || $primaryCall['user'] !== 'bcuser' || strpos((string) $primaryCall['url'], 'https://bc.example:7148/Production/ODataV4/Company(') !== 0) {
+    fail('bedrijf op het primaire environment viel niet terug op $auth: ' . json_encode($primaryCall));
+}
+
 $log = fallback_log();
-if (strpos($log, 'sandbox-secret') !== false || strpos($log, 'file-secret') !== false || strpos($log, 'bc-secret') !== false || strpos($log, 'mimir_test_key_should_not_leak') !== false || strpos($log, 'mimir_from_file_should_not_leak') !== false) {
+if (strpos($log, 'sandbox-secret') !== false || strpos($log, 'file-secret') !== false || strpos($log, 'bc-secret') !== false || strpos($log, 'sand-secret') !== false || strpos($log, 'mimir_test_key_should_not_leak') !== false || strpos($log, 'mimir_from_file_should_not_leak') !== false) {
     fail('log bevat een geheim');
 }
 
