@@ -19,16 +19,19 @@ function consolelog($text)
 }
 
 /**
- * Mímir-proxy: als $mimirApi in auth.php staat, gaan alle OData-fetches
- * (nightly via odata_get_json, company-discovery en overige reads via odata_get_all)
- * naar Mímir i.p.v. BC.
+ * Mímir-proxy: als $mimirApi in auth.php staat, gaan OData-fetches eerst naar Mímir
+ * (nightly via odata_get_json, company-discovery en overige reads via odata_get_all).
+ * Faalt die aanroep (cURL/timeout, non-2xx, ongeldige JSON of een Mímir-foutpayload),
+ * dan valt Aequitas terug op de directe BC-route van vóór de Mímir-migratie:
+ * $baseUrl + $auth / $auth_list / $environment en de lokale odata-filecache.
+ * Na de eerste fout in dit PHP-proces wordt Mímir overgeslagen.
+ * Zonder $mimirApi blijft alleen die directe route actief.
+ * Zonder BC-credentials wordt de oorspronkelijke Mímir-fout opnieuw gegooid.
  *
- * Met $mimirApi gezet zijn $auth_list / $environment / $baseUrl / $auth ongebruikt voor BC;
- * Mímir beheert environments — Aequitas heeft alleen de API-key (+ optioneel $mimirBase) nodig.
- *
- * Zet in web/auth.php (niet in git):
+ * Zet in web/auth.php (niet in git), naast elkaar:
  *   $mimirApi  = 'mimir_…';              // verplicht om Mímir te activeren
  *   $mimirBase = 'https://sleutels.kvt.nl/mimir/api'; // optioneel
+ *   én $auth_list / $environment / $auth / $baseUrl voor de BC-fallback.
  */
 
 function odata_mimir_api_key(): string
@@ -54,11 +57,256 @@ function odata_mimir_base_url(): string
     return 'https://sleutels.kvt.nl/mimir/api';
 }
 
+/**
+ * @return array{open: bool, error: ?Throwable}
+ */
+function &odata_mimir_circuit_state(): array
+{
+    static $state = [
+        'open' => false,
+        'error' => null,
+    ];
+    return $state;
+}
+
+function odata_mimir_circuit_open(): bool
+{
+    $state = &odata_mimir_circuit_state();
+    return $state['open'] === true;
+}
+
+function odata_mimir_last_error(): ?Throwable
+{
+    $state = &odata_mimir_circuit_state();
+    return $state['error'] instanceof Throwable ? $state['error'] : null;
+}
+
+function odata_mimir_trip(Throwable $exception): void
+{
+    $state = &odata_mimir_circuit_state();
+    if ($state['open'] === true) {
+        return;
+    }
+    $state['open'] = true;
+    $state['error'] = $exception;
+}
+
+function odata_mimir_circuit_reset(): void
+{
+    $state = &odata_mimir_circuit_state();
+    $state['open'] = false;
+    $state['error'] = null;
+}
+
+function odata_mimir_connect_timeout_seconds(): int
+{
+    return 10;
+}
+
+function odata_mimir_timeout_seconds_for_sapi(string $sapi): int
+{
+    return strtolower($sapi) === 'cli' ? 600 : 90;
+}
+
+function odata_mimir_timeout_seconds(): int
+{
+    return odata_mimir_timeout_seconds_for_sapi(PHP_SAPI);
+}
+
+function odata_mimir_fail(Exception $exception): void
+{
+    odata_mimir_trip($exception);
+    throw $exception;
+}
+
+function odata_auth_is_usable($auth): bool
+{
+    if (!is_array($auth)) {
+        return false;
+    }
+    $user = trim((string) ($auth['user'] ?? ''));
+    if ($user === '') {
+        return false;
+    }
+    $mode = (string) ($auth['mode'] ?? '');
+    if ($mode !== 'basic' && $mode !== 'ntlm') {
+        return false;
+    }
+    return array_key_exists('pass', $auth);
+}
+
+function odata_ensure_bc_config_loaded(): void
+{
+    global $baseUrl, $auth, $auth_list, $environment;
+    if (isset($baseUrl) || isset($auth) || isset($auth_list) || isset($environment)) {
+        return;
+    }
+    $path = __DIR__ . '/auth.php';
+    if (!is_file($path)) {
+        return;
+    }
+    require_once $path;
+}
+
+function odata_bc_base_url(): ?string
+{
+    odata_ensure_bc_config_loaded();
+    global $baseUrl;
+    if (!isset($baseUrl) || !is_string($baseUrl)) {
+        return null;
+    }
+    $base = trim($baseUrl);
+    if ($base === '' || stripos($base, 'mimir.invalid') !== false) {
+        return null;
+    }
+    return $base;
+}
+
+function odata_bc_environment(): ?string
+{
+    odata_ensure_bc_config_loaded();
+    global $environment;
+    if (!isset($environment) || !is_string($environment)) {
+        return null;
+    }
+    $env = trim($environment);
+    if ($env === '' || strcasecmp($env, 'mimir') === 0) {
+        return null;
+    }
+    return $env;
+}
+
+function odata_bc_auth_for_fallback(array $passed): ?array
+{
+    odata_ensure_bc_config_loaded();
+    if (odata_auth_is_usable($passed)) {
+        return $passed;
+    }
+    global $auth, $auth_list, $environment;
+    if (isset($auth) && odata_auth_is_usable($auth)) {
+        return $auth;
+    }
+    if (isset($environment, $auth_list) && is_array($auth_list) && isset($auth_list[$environment]) && odata_auth_is_usable($auth_list[$environment])) {
+        return $auth_list[$environment];
+    }
+    if (isset($auth_list) && is_array($auth_list)) {
+        foreach ($auth_list as $entry) {
+            if (odata_auth_is_usable($entry)) {
+                return $entry;
+            }
+        }
+    }
+    return null;
+}
+
+function odata_bc_credentials_configured(): bool
+{
+    if (odata_bc_base_url() === null || odata_bc_environment() === null) {
+        return false;
+    }
+    return odata_bc_auth_for_fallback([]) !== null;
+}
+
+function odata_mimir_log_fallback(Throwable $exception): void
+{
+    $message = $exception->getMessage();
+    $redactions = [];
+    $apiKey = odata_mimir_api_key();
+    if ($apiKey !== '') {
+        $redactions[] = $apiKey;
+    }
+    global $auth, $auth_list;
+    if (isset($auth) && is_array($auth) && isset($auth['pass']) && is_string($auth['pass']) && $auth['pass'] !== '') {
+        $redactions[] = $auth['pass'];
+    }
+    if (isset($auth_list) && is_array($auth_list)) {
+        foreach ($auth_list as $entry) {
+            if (is_array($entry) && isset($entry['pass']) && is_string($entry['pass']) && $entry['pass'] !== '') {
+                $redactions[] = $entry['pass'];
+            }
+        }
+    }
+    foreach ($redactions as $secret) {
+        $message = str_replace($secret, '[redacted]', $message);
+    }
+    $sanitized = preg_replace('/(Bearer\s+)\S+/i', '$1[redacted]', $message);
+    if (is_string($sanitized)) {
+        $message = $sanitized;
+    }
+    error_log('[Aequitas] Mímir failed, falling back to direct OData: ' . $message);
+}
+
+/**
+ * @template T
+ * @param callable(): T $viaMimir
+ * @param callable(): T $viaDirect
+ * @return T
+ */
+function odata_mimir_or_direct(callable $viaMimir, callable $viaDirect)
+{
+    if (odata_mimir_circuit_open()) {
+        $original = odata_mimir_last_error();
+        if (!odata_bc_credentials_configured()) {
+            if ($original instanceof Throwable) {
+                throw $original;
+            }
+            throw new Exception('Mímir eerder mislukt.');
+        }
+        odata_mimir_log_fallback($original instanceof Throwable ? $original : new Exception('Mímir overgeslagen na eerdere fout.'));
+        return $viaDirect();
+    }
+
+    try {
+        return $viaMimir();
+    } catch (Throwable $exception) {
+        odata_mimir_trip($exception);
+        if (!odata_bc_credentials_configured()) {
+            throw $exception;
+        }
+        odata_mimir_log_fallback($exception);
+        return $viaDirect();
+    }
+}
+
+function odata_bc_url_from_odata_url(string $url): string
+{
+    $parts = parse_url($url);
+    if (!is_array($parts)) {
+        return $url;
+    }
+    $host = strtolower((string) ($parts['host'] ?? ''));
+    if ($host !== '' && $host !== 'mimir.invalid') {
+        return $url;
+    }
+    $base = odata_bc_base_url();
+    $env = odata_bc_environment();
+    if ($base === null || $env === null) {
+        return $url;
+    }
+    $path = (string) ($parts['path'] ?? '');
+    if (preg_match('#^/[^/]+(/.+)$#', $path, $match) !== 1) {
+        return $url;
+    }
+    $rebuilt = $base . $env . $match[1];
+    if (isset($parts['query']) && is_string($parts['query']) && $parts['query'] !== '') {
+        $rebuilt .= '?' . $parts['query'];
+    }
+    return $rebuilt;
+}
+
 function odata_mimir_request(string $method, string $path, ?array $jsonBody = null): array
 {
     $apiKey = odata_mimir_api_key();
     if ($apiKey === '') {
         throw new Exception('Mímir API-sleutel ontbreekt ($mimirApi).');
+    }
+
+    if (odata_mimir_circuit_open()) {
+        $previous = odata_mimir_last_error();
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+        throw new Exception('Mímir overgeslagen na eerdere fout in dit verzoek.');
     }
 
     $url = odata_mimir_base_url() . '/' . ltrim($path, '/');
@@ -71,8 +319,8 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
     $opts = [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_CONNECTTIMEOUT => 30,
-        CURLOPT_TIMEOUT => 600,
+        CURLOPT_CONNECTTIMEOUT => odata_mimir_connect_timeout_seconds(),
+        CURLOPT_TIMEOUT => odata_mimir_timeout_seconds(),
         CURLOPT_CUSTOMREQUEST => strtoupper($method),
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_USERAGENT => 'Aequitas-MimirClient/1.0',
@@ -80,6 +328,7 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
     if ($jsonBody !== null) {
         $payload = json_encode($jsonBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payload === false) {
+            curl_close($ch);
             throw new Exception('Mímir request JSON encode mislukt.');
         }
         $headers[] = 'Content-Type: application/json';
@@ -91,7 +340,7 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
     if ($raw === false) {
         $err = curl_error($ch);
         curl_close($ch);
-        throw new Exception('Mímir cURL error: ' . $err);
+        odata_mimir_fail(new Exception('Mímir cURL error: ' . $err));
     }
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
@@ -99,10 +348,15 @@ function odata_mimir_request(string $method, string $path, ?array $jsonBody = nu
     $decoded = json_decode($raw, true);
     if ($code < 200 || $code >= 300) {
         $message = is_array($decoded) ? (string) ($decoded['error'] ?? $raw) : $raw;
-        throw new Exception('Mímir HTTP ' . $code . ': ' . $message);
+        odata_mimir_fail(new Exception('Mímir HTTP ' . $code . ': ' . $message));
     }
     if (!is_array($decoded)) {
-        throw new Exception('Mímir gaf ongeldige JSON terug.');
+        odata_mimir_fail(new Exception('Mímir gaf ongeldige JSON terug.'));
+    }
+    $errorField = $decoded['error'] ?? null;
+    if ($errorField !== null && $errorField !== '' && $errorField !== false) {
+        $message = is_string($errorField) ? $errorField : (string) json_encode($errorField, JSON_UNESCAPED_UNICODE);
+        odata_mimir_fail(new Exception('Mímir error: ' . $message));
     }
     return $decoded;
 }
@@ -161,7 +415,7 @@ function odata_mimir_parse_companies_url(string $url): ?array
 /**
  * @return list<array<string, mixed>>
  */
-function odata_mimir_companies_as_rows(?string $environment = null): array
+function odata_mimir_companies_as_rows_impl(?string $environment = null): array
 {
     $response = odata_mimir_request('GET', 'companies.php');
     $items = $response['value'] ?? null;
@@ -184,6 +438,148 @@ function odata_mimir_companies_as_rows(?string $environment = null): array
         $rows[] = ['Name' => $name, 'environment' => $env];
     }
     return $rows;
+}
+
+/**
+ * Environments uit auth.php, dezelfde selectie als vóór de Mímir-migratie.
+ *
+ * @return list<string>
+ */
+function odata_direct_environment_names(?string $environmentFilter): array
+{
+    if ($environmentFilter !== null && trim($environmentFilter) !== '' && strcasecmp(trim($environmentFilter), 'mimir') !== 0) {
+        return [trim($environmentFilter)];
+    }
+
+    global $environment, $auth_list;
+    $configured = [];
+    if (isset($environment) && (is_string($environment) || is_array($environment))) {
+        $items = is_array($environment) ? $environment : preg_split('/[\s,;]+/', $environment);
+        if (!is_array($items)) {
+            $items = [];
+        }
+        $seen = [];
+        foreach ($items as $item) {
+            $name = trim((string) $item);
+            if ($name === '' || strcasecmp($name, 'mimir') === 0 || isset($seen[$name])) {
+                continue;
+            }
+            $seen[$name] = true;
+            $configured[] = $name;
+        }
+    }
+
+    $known = [];
+    if (isset($auth_list) && is_array($auth_list)) {
+        foreach ($auth_list as $key => $value) {
+            $known[] = (string) $key;
+        }
+    }
+    if ($configured !== []) {
+        $knownMap = array_fill_keys($known, true);
+        $configured = array_values(array_filter($configured, static function (string $item) use ($knownMap): bool {
+            return isset($knownMap[$item]);
+        }));
+    }
+    if ($configured === [] && $known !== []) {
+        return [(string) $known[0]];
+    }
+    return $configured;
+}
+
+/**
+ * Directe BC-companylijst via de pre-Mímir OData-URL's
+ * ({base}/{env}/ODataV4/Companies en Company).
+ *
+ * @return list<array<string, mixed>>
+ */
+function odata_direct_companies_as_rows(?string $environmentFilter = null): array
+{
+    $envs = odata_direct_environment_names($environmentFilter);
+    $base = odata_bc_base_url();
+    if ($base === null || $envs === []) {
+        $previous = odata_mimir_last_error();
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+        throw new Exception('Mímir mislukt.');
+    }
+
+    $out = [];
+    $lastError = odata_mimir_last_error();
+    foreach ($envs as $env) {
+        $auth = null;
+        global $auth_list;
+        if (isset($auth_list) && is_array($auth_list) && isset($auth_list[$env]) && odata_auth_is_usable($auth_list[$env])) {
+            $auth = $auth_list[$env];
+        }
+        if ($auth === null) {
+            $auth = odata_bc_auth_for_fallback([]);
+        }
+        if ($auth === null) {
+            continue;
+        }
+
+        $prefix = rtrim($base, '/') . '/' . rawurlencode($env) . '/ODataV4/';
+        $urls = [
+            $prefix . 'Companies?$select=Name',
+            $prefix . 'Company?$select=Name',
+            $prefix . 'Companies',
+            $prefix . 'Company',
+        ];
+        $rows = [];
+        foreach ($urls as $url) {
+            try {
+                $rows = odata_get_all_direct($url, $auth, 300);
+                if (is_array($rows) && $rows !== []) {
+                    break;
+                }
+            } catch (Throwable $error) {
+                $lastError = $error;
+                $rows = [];
+            }
+        }
+        if ($rows === []) {
+            continue;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $name = trim((string) ($row['Name'] ?? $row['name'] ?? $row['Display_Name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $out[] = ['Name' => $name, 'environment' => $env];
+        }
+    }
+
+    if ($out === []) {
+        if ($lastError instanceof Throwable) {
+            throw $lastError;
+        }
+        throw new Exception('Mímir mislukt.');
+    }
+    return $out;
+}
+
+/**
+ * @return list<array<string, mixed>>
+ */
+function odata_mimir_companies_as_rows(?string $environment = null): array
+{
+    $fromMimir = static function () use ($environment): array {
+        return odata_mimir_companies_as_rows_impl($environment);
+    };
+    if (!odata_mimir_enabled()) {
+        return $fromMimir();
+    }
+    return odata_mimir_or_direct(
+        $fromMimir,
+        static function () use ($environment): array {
+            return odata_direct_companies_as_rows($environment);
+        }
+    );
 }
 
 /**
@@ -240,7 +636,7 @@ function odata_mimir_company_environment_map(?string $environment = null): array
  * @param array<string, mixed> $odataQuery
  * @return list<array<string, mixed>>
  */
-function odata_mimir_query(string $company, string $table, array $odataQuery, int $ttlSeconds): array
+function odata_mimir_query_impl(string $company, string $table, array $odataQuery, int $ttlSeconds): array
 {
     consolelog("Mímir query company=$company table=$table\n");
 
@@ -280,15 +676,77 @@ function odata_mimir_query(string $company, string $table, array $odataQuery, in
 }
 
 /**
+ * Zelfde company/table-query, maar via de pre-Mímir BC-URL en filecache.
+ *
+ * @param array<string, mixed> $odataQuery
  * @return list<array<string, mixed>>
  */
-function odata_mimir_fetch_all(string $url, int $ttlSeconds): array
+function odata_direct_query(string $company, string $table, array $odataQuery, int $ttlSeconds): array
+{
+    $env = odata_bc_environment();
+    $base = odata_bc_base_url();
+    $auth = odata_bc_auth_for_fallback([]);
+    if ($env === null || $base === null || $auth === null) {
+        $previous = odata_mimir_last_error();
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+        throw new Exception('Mímir mislukt.');
+    }
+
+    $params = [];
+    foreach (['$select', '$filter', '$orderby', '$expand', '$top', '$skip', 'select', 'filter'] as $key) {
+        if (!array_key_exists($key, $odataQuery)) {
+            continue;
+        }
+        $value = trim((string) $odataQuery[$key]);
+        if ($value === '') {
+            continue;
+        }
+        $odataKey = ($key === 'select' || $key === 'filter') ? ('$' . $key) : $key;
+        $params[$odataKey] = $value;
+    }
+
+    $safeCompany = str_replace("'", "''", trim($company));
+    $companySegment = "Company('" . rawurlencode($safeCompany) . "')";
+    $url = rtrim($base, '/') . '/' . rawurlencode($env) . '/ODataV4/' . $companySegment . '/' . rawurlencode($table);
+    if ($params !== []) {
+        $url .= '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    return odata_get_all_direct($url, $auth, $ttlSeconds);
+}
+
+/**
+ * @param array<string, mixed> $odataQuery
+ * @return list<array<string, mixed>>
+ */
+function odata_mimir_query(string $company, string $table, array $odataQuery, int $ttlSeconds): array
+{
+    $fromMimir = static function () use ($company, $table, $odataQuery, $ttlSeconds): array {
+        return odata_mimir_query_impl($company, $table, $odataQuery, $ttlSeconds);
+    };
+    if (!odata_mimir_enabled()) {
+        return $fromMimir();
+    }
+    return odata_mimir_or_direct(
+        $fromMimir,
+        static function () use ($company, $table, $odataQuery, $ttlSeconds): array {
+            return odata_direct_query($company, $table, $odataQuery, $ttlSeconds);
+        }
+    );
+}
+
+/**
+ * @return list<array<string, mixed>>
+ */
+function odata_mimir_fetch_all_impl(string $url, int $ttlSeconds): array
 {
     consolelog("Mímir fetch $url\n");
 
     $companies = odata_mimir_parse_companies_url($url);
     if ($companies !== null) {
-        return odata_mimir_companies_as_rows($companies['environment']);
+        return odata_mimir_companies_as_rows_impl($companies['environment']);
     }
 
     $parsed = odata_mimir_parse_entity_url($url);
@@ -296,7 +754,34 @@ function odata_mimir_fetch_all(string $url, int $ttlSeconds): array
         throw new Exception('Mímir: OData-URL kon niet worden vertaald naar company/table: ' . $url);
     }
 
-    return odata_mimir_query($parsed['company'], $parsed['entity'], $parsed['query'], $ttlSeconds);
+    return odata_mimir_query_impl($parsed['company'], $parsed['entity'], $parsed['query'], $ttlSeconds);
+}
+
+/**
+ * @return list<array<string, mixed>>
+ */
+function odata_mimir_fetch_all(string $url, int $ttlSeconds): array
+{
+    $fromMimir = static function () use ($url, $ttlSeconds): array {
+        return odata_mimir_fetch_all_impl($url, $ttlSeconds);
+    };
+    if (!odata_mimir_enabled()) {
+        return $fromMimir();
+    }
+    return odata_mimir_or_direct(
+        $fromMimir,
+        static function () use ($url, $ttlSeconds): array {
+            $auth = odata_bc_auth_for_fallback([]);
+            if ($auth === null) {
+                $previous = odata_mimir_last_error();
+                if ($previous instanceof Throwable) {
+                    throw $previous;
+                }
+                throw new Exception('Mímir mislukt.');
+            }
+            return odata_get_all_direct(odata_bc_url_from_odata_url($url), $auth, $ttlSeconds);
+        }
+    );
 }
 
 function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
@@ -304,12 +789,33 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
     consolelog("Fetching $url\n");
     $ttlSeconds = max(0, (int) $ttlSeconds);
 
-    if (odata_mimir_api_key() !== '') {
-        // Mímir beheert de BC-cache (max_age); Aequitas-filecache wordt overgeslagen.
-        return odata_mimir_fetch_all($url, $ttlSeconds === 0 ? 3600 : $ttlSeconds);
+    if (odata_mimir_enabled()) {
+        return odata_mimir_or_direct(
+            static function () use ($url, $ttlSeconds): array {
+                // Mímir beheert de BC-cache (max_age); Aequitas-filecache wordt overgeslagen.
+                return odata_mimir_fetch_all_impl($url, $ttlSeconds === 0 ? 3600 : $ttlSeconds);
+            },
+            static function () use ($url, $auth, $ttlSeconds): array {
+                $directAuth = odata_bc_auth_for_fallback($auth);
+                if ($directAuth === null) {
+                    $directAuth = $auth;
+                }
+                return odata_get_all_direct(odata_bc_url_from_odata_url($url), $directAuth, $ttlSeconds);
+            }
+        );
     }
 
-    $ttlSeconds = max(1, $ttlSeconds);
+    return odata_get_all_direct($url, $auth, $ttlSeconds);
+}
+
+function odata_get_all_direct(string $url, array $auth, $ttlSeconds = 300): array
+{
+    $ttlSeconds = max(1, (int) $ttlSeconds);
+    if (isset($GLOBALS['AEQUITAS_ODATA_BC_FETCH']) && is_callable($GLOBALS['AEQUITAS_ODATA_BC_FETCH'])) {
+        $fetcher = $GLOBALS['AEQUITAS_ODATA_BC_FETCH'];
+        return $fetcher($url, $auth, $ttlSeconds);
+    }
+
     maybe_cleanup_expired_cache_files();
 
     $cacheKey = build_cache_key($url, $auth);
@@ -334,7 +840,7 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
     $next = $url;
 
     while ($next) {
-        $resp = odata_get_json($next, $auth);
+        $resp = odata_get_json_direct($next, $auth);
 
         if (!isset($resp['value']) || !is_array($resp['value'])) {
             throw new Exception("OData response missing 'value' array");
@@ -353,11 +859,36 @@ function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
 
 function odata_get_json(string $url, array $auth): array
 {
-    if (odata_mimir_api_key() !== '') {
-        // Nightly pagineert via deze functie. Mímir levert de hele set; geen BC-nextLink.
-        // De paginator geeft geen TTL mee; max_age volgt de standaard van odata_get_all.
-        $rows = odata_mimir_fetch_all($url, 300);
-        return ['value' => $rows];
+    if (odata_mimir_enabled()) {
+        return odata_mimir_or_direct(
+            static function () use ($url): array {
+                // Nightly pagineert via deze functie. Mímir levert de hele set; geen BC-nextLink.
+                // De paginator geeft geen TTL mee; max_age volgt de standaard van odata_get_all.
+                $rows = odata_mimir_fetch_all_impl($url, 300);
+                return ['value' => $rows];
+            },
+            static function () use ($url, $auth): array {
+                $directAuth = odata_bc_auth_for_fallback($auth);
+                if ($directAuth === null) {
+                    $directAuth = $auth;
+                }
+                return odata_get_json_direct(odata_bc_url_from_odata_url($url), $directAuth);
+            }
+        );
+    }
+
+    return odata_get_json_direct($url, $auth);
+}
+
+function odata_get_json_direct(string $url, array $auth): array
+{
+    if (isset($GLOBALS['AEQUITAS_ODATA_BC_FETCH']) && is_callable($GLOBALS['AEQUITAS_ODATA_BC_FETCH'])) {
+        $fetcher = $GLOBALS['AEQUITAS_ODATA_BC_FETCH'];
+        $fetched = $fetcher($url, $auth, 0);
+        if (is_array($fetched) && array_key_exists('value', $fetched)) {
+            return $fetched;
+        }
+        return ['value' => is_array($fetched) ? $fetched : []];
     }
 
     $ch = curl_init($url);

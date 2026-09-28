@@ -234,7 +234,8 @@ function aequitas_bc_auth(string $company = ''): array
     $env = trim((string) $env);
     $authConfig = $env !== '' ? auth_get_auth_for_environment($env) : [];
 
-    // Mímir-modus: OData-URL's worden in odata_get_json vertaald; BC baseUrl/auth zijn dan niet nodig.
+    // Mímir-modus mag zonder BC-config starten. Staan baseUrl/auth wél in auth.php,
+    // dan gebruikt de fallback die zodra Mímir faalt.
     $mimirEnabled = function_exists('auth_mimir_enabled') && auth_mimir_enabled();
 
     if ($env === '' && !$mimirEnabled) {
@@ -462,7 +463,7 @@ function aequitas_item_should_keep(array $item, array $priceInfo): bool
 function aequitas_paginate_entity(string $company, string $entitySet, array $query, callable $onRow): array
 {
     $ctx = aequitas_bc_auth($company);
-    // Lege $baseUrl is geldig in Mímir-modus; odata_get_json vertaalt het pad.
+    // Lege $baseUrl is geldig zolang Mímir de fetch doet. De directe fallback heeft baseUrl nodig.
     $mimirEnabled = function_exists('odata_mimir_enabled') && odata_mimir_enabled();
     if ($ctx['baseUrl'] === '' && !$mimirEnabled) {
         throw new RuntimeException('baseUrl ontbreekt in auth-configuratie.');
