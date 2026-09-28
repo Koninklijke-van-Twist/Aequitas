@@ -15,3 +15,5 @@ De applicatie draait vanuit `web/` via `index.php`. Roep `nightly.php` aan om de
 Zet in `web/auth.php` (niet in git) `$mimirApi` én de directe BC-gegevens naast elkaar: `$baseUrl`, `$environment`, `$auth_list` en `$auth`. Zie `web/auth_TEMPLATE.php`.
 
 Met `$mimirApi` gezet gaan OData-fetches (live pagina's, `nightly.php` via web én via CLI) eerst naar Mímir. Faalt die aanroep, dan gebruikt hetzelfde verzoek de oude directe BC-route en slaat Mímir voor de rest van dat PHP-proces over. Zonder `$mimirApi` blijft alleen die directe route actief. Ontbreken de BC-gegevens, dan komt de oorspronkelijke Mímir-fout terug.
+
+De fallback staat in `web/odata.php`. Dat bestand verder niet wijzigen; deze fallback is een goedgekeurde uitzondering (Tim Falken, 2026-09-28).
