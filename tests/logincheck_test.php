@@ -4,15 +4,6 @@
  * Run: php tests/logincheck_test.php
  */
 
-$root = sys_get_temp_dir() . '/aequitas-logincheck-test-' . getmypid();
-@mkdir($root . '/web', 0777, true);
-@mkdir($root . '/login', 0777, true);
-copy(dirname(__DIR__) . '/web/logincheck.php', $root . '/web/logincheck.php');
-file_put_contents($root . '/login/lib.php', "<?php\n\$_SESSION['user'] = ['email' => (string) getenv('TEST_EMAIL')];\n");
-file_put_contents($root . '/login/403.php', "<?php\necho 'DENIED';\n");
-
-$failures = 0;
-
 /**
  * @param string $authCode PHP-code die auth.php zou bevatten ('' = geen $allowedUsers)
  */
@@ -37,6 +28,15 @@ function run_case(string $root, string $label, string $authCode, string $email, 
     $failures++;
     echo "FAIL {$label}: verwacht {$expected}, kreeg {$output}\n";
 }
+
+$root = sys_get_temp_dir() . '/aequitas-logincheck-test-' . getmypid();
+@mkdir($root . '/web', 0777, true);
+@mkdir($root . '/login', 0777, true);
+copy(dirname(__DIR__) . '/web/logincheck.php', $root . '/web/logincheck.php');
+file_put_contents($root . '/login/lib.php', "<?php\n\$_SESSION['user'] = ['email' => (string) getenv('TEST_EMAIL')];\n");
+file_put_contents($root . '/login/403.php', "<?php\necho 'DENIED';\n");
+
+$failures = 0;
 
 run_case($root, 'ontbrekende $allowedUsers laat elke login toe', '', 'iemand@kvt.nl', 'ALLOWED');
 run_case($root, 'null $allowedUsers laat elke login toe', '$allowedUsers = null;', 'iemand@kvt.nl', 'ALLOWED');
