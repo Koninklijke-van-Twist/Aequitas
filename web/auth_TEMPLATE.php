@@ -23,6 +23,8 @@ $environment = 'Production';
 $auth = $auth_list[$environment];
 $baseUrl = 'https://my-bc-domain.com:7148/';
 
+// Optioneel. Weglaten of [] = elke geldige Entra-login heeft toegang;
+// een lijst met e-mailadressen = alleen die accounts.
 $allowedUsers = [
     'user@domain.nl',
 ];

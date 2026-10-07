@@ -10,6 +10,10 @@ Inkoopprijsvergelijking op basis van `AppItemCard` en `Prijslijstregels` uit Bus
 
 De applicatie draait vanuit `web/` via `index.php`. Roep `nightly.php` aan om de cache te vullen of te verversen (webverzoek of CLI/cron: `php web/nightly.php`). `hourly.php` doet geen Business Central-call.
 
+## Toegang
+
+`$allowedUsers` in `web/auth.php` is optioneel en werkt zoals bij Kothar/Ktesios: weglaten of `[]` laat elke geldige Entra-login toe; een lijst met e-mailadressen beperkt Aequitas tot die accounts. Zet de variabele op topniveau in `auth.php`, niet in een functie.
+
 ## Mímir en Business Central
 
 Zet in `web/auth.php` (niet in git) `$mimirApi` én de directe BC-gegevens naast elkaar: `$baseUrl`, `$environment`, `$auth_list` en `$auth`. Zie `web/auth_TEMPLATE.php`.
