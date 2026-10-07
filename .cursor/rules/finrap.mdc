@@ -11,8 +11,8 @@ alwaysApply: true
 - De app is mobile-first. Nieuwe UI-wijzigingen moeten eerst op telefoonscherm goed leesbaar zijn.
 
 ## Niet wijzigen
-- Bestand `web/logincheck.php` niet aanpassen.
-- Bestand `web/odata.php` niet aanpassen, behalve de Mímir-naar-directe-BC-fallback. Die uitzondering is goedgekeurd door Tim Falken op 2026-09-28.
+- Bestand `web/logincheck.php` niet aanpassen, behalve de fail-safe voor een ontbrekende of lege `$allowedUsers` (nightly-fix op verzoek van Tim Falken, 2026-10-07).
+- Bestand `web/odata.php` niet aanpassen, behalve de Mímir-naar-directe-BC-fallback. Die uitzondering is goedgekeurd door Tim Falken op 2026-09-28. Ook toegestaan: de foutweergave bovenaan (display_errors uit buiten CLI, nightly-fix 2026-10-07).
 - Bestand `web/auth.php` alleen aanpassen na expliciete gebruikersvraag.
 
 ## Data en logica

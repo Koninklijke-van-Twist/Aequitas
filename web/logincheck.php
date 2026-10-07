@@ -14,13 +14,34 @@ function is_trusted_requester(): bool
     return false;
 }
 
+/**
+ * $allowedUsers uit auth.php is optioneel (zelfde gedrag als Kothar/Ktesios):
+ * weglaten of [] laat elke geldige Entra-login toe; een lijst beperkt tot die adressen.
+ * Een ongeldige waarde (geen lijst/string) beperkt de toegang tot niemand (fail-closed).
+ */
+$aequitasAllowedUsersRaw = $allowedUsers ?? [];
+if (is_string($aequitasAllowedUsersRaw)) {
+    $aequitasAllowedUsersRaw = [$aequitasAllowedUsersRaw];
+} elseif (!is_array($aequitasAllowedUsersRaw)) {
+    error_log('Aequitas: $allowedUsers in auth.php is geen lijst; toegang geweigerd.');
+    $aequitasAllowedUsersRaw = [null];
+}
+$aequitasRestrictUsers = count($aequitasAllowedUsersRaw) > 0;
+$aequitasAllowList = [];
+foreach ($aequitasAllowedUsersRaw as $aequitasAllowedEmail) {
+    $aequitasAllowedEmail = is_string($aequitasAllowedEmail) ? strtolower(trim($aequitasAllowedEmail)) : '';
+    if ($aequitasAllowedEmail !== '') {
+        $aequitasAllowList[] = $aequitasAllowedEmail;
+    }
+}
+
 if (is_trusted_requester()) {
     if (session_status() !== PHP_SESSION_ACTIVE) {
         @session_start();
     }
 
     $currentEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
-    $defaultAllowedUser = strtolower(trim((string) ($allowedUsers[0] ?? '')));
+    $defaultAllowedUser = $aequitasAllowList[0] ?? '';
     if ($currentEmail === '' && $defaultAllowedUser !== '') {
         if (!is_array($_SESSION['user'] ?? null)) {
             $_SESSION['user'] = [];
@@ -33,11 +54,10 @@ if (is_trusted_requester()) {
 if (!is_trusted_requester()) {
     require __DIR__ . "/../login/lib.php";
 
-    if (
-        !array_any($allowedUsers, function ($email) {
-            return strtolower((string) $email) === strtolower((string) ($_SESSION['user']['email'] ?? ''));
-        })
-    ) {
+    $aequitasSessionEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
+    $aequitasIsAllowed = $aequitasSessionEmail !== ''
+        && (!$aequitasRestrictUsers || in_array($aequitasSessionEmail, $aequitasAllowList, true));
+    if (!$aequitasIsAllowed) {
         require __DIR__ . "/../login/403.php";
         die();
     }
