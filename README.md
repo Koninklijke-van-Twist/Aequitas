@@ -6,6 +6,8 @@ Inkoopprijsvergelijking op basis van `AppItemCard` en `Prijslijstregels` uit Bus
 
 `nightly.php` haalt per bedrijf de volledige actuele Prijslijstregels en AppItemCard (Artikelen) op en schrijft de cache. Alleen afwijkende bedragen en dubbele regels blijven in de item-cache. `index.php` leest alleen die cache. `hourly.php` haalt geen AppItemCard op.
 
+`web/analytics/analytics.sqlite` (en `*.sqlite-*`) blijft op de server staan bij een deploy: de FTP-mirror slaat die bestanden al over. Dezelfde mirror slaat `.htaccess` over, dus een gecommit bestand komt niet mee en een bestaand bestand wordt niet gewist. `analytics.php` schrijft `web/analytics/.htaccess` als die ontbreekt (of vult hem aan als het woord `sqlite` er nog niet in staat), zodat Apache de database weigert en `analytics.php` zelf bereikbaar blijft.
+
 ## Starten
 
 De applicatie draait vanuit `web/` via `index.php`. Roep `nightly.php` aan om de cache te vullen of te verversen (webverzoek of CLI/cron: `php web/nightly.php`). `hourly.php` doet geen Business Central-call.
